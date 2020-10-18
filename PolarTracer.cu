@@ -161,11 +161,9 @@ void RayTraceScene(Image& cpuOutputImage) {
   float* gpuImageBuffer;
   cudaMallocManaged(&gpuImageBuffer, f32BufferSize);
 
-  // calculate the __
-  const size_t nThreadsPerBlock = 512; // 32*32*32 (32*32 warps of 32 threads)
-  const size_t nBlocks          = std::ceil(cpuOutputImage.GetPixelCount() / static_cast<float>(nThreadsPerBlock));
-
-  const dim3 dimBlock = dim3(16, 16);
+  // Allocate 1 thread per pixel of coordinates (X,Y). Use as many blocks in the grid as needed
+  // The RayTrace function will use the thread's index (both in the grid and in a block) to determine the pixel it will trace rays through
+  const dim3 dimBlock = dim3(32, 32); // 32 warps of 32 threads per block
   const dim3 dimGrid  = dim3(std::ceil(cpuOutputImage.GetWidth()  / static_cast<float>(dimBlock.x)),
                              std::ceil(cpuOutputImage.GetHeight() / static_cast<float>(dimBlock.y)));
 
