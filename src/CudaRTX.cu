@@ -1,15 +1,28 @@
 #include "Common.hpp"
 
+#include <thrust/device_vector.h>
+
 // Small helper functions
 template <typename _T>
-inline _T Clamp(const _T& x, const _T& min, const _T& max) noexcept {
+__device__ _T Clamp(const _T& x, const _T& min, const _T& max) noexcept {
     if (x > max) return max;
     if (x < min) return min;
 
     return x;
 }
 
-__global__ void RayTrace(Colorf32* pFloatImage, const size_t width, const size_t height) {
+// float4 vector operator overloading!
+__device__ inline float4 operator+(const float4& a, const float4& b) noexcept { return make_float4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w); }
+__device__ inline float4 operator-(const float4& a, const float4& b) noexcept { return make_float4(a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w); }
+__device__ inline float4 operator*(const float4& a, const float4& b) noexcept { return make_float4(a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w); }
+__device__ inline float4 operator/(const float4& a, const float4& b) noexcept { return make_float4(a.x / b.x, a.y / b.y, a.z / b.z, a.w / b.w); }
+
+template <typename T> __device__ inline float4 operator+(const float4& a, const T& n) noexcept { return make_float4(a.x + n, a.y + n, a.z + n, a.w + n); }
+template <typename T> __device__ inline float4 operator-(const float4& a, const T& n) noexcept { return make_float4(a.x - n, a.y - n, a.z - n, a.w - n); }
+template <typename T> __device__ inline float4 operator*(const float4& a, const T& n) noexcept { return make_float4(a.x * n, a.y * n, a.z * n, a.w * n); }
+template <typename T> __device__ inline float4 operator/(const float4& a, const T& n) noexcept { return make_float4(a.x / n, a.y / n, a.z / n, a.w / n); }
+
+__global__ void RayTrace(std::uint8_t* pBuffer, const size_t width, const size_t height) {
     // Calculate the thread's (X, Y) location
     const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
     const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
@@ -19,44 +32,40 @@ __global__ void RayTrace(Colorf32* pFloatImage, const size_t width, const size_t
 
     // Determine the pixel's index into the image buffer
     const size_t index = pixelX + pixelY * width;
-  
+    
+    // the current pixel's color (represented with floating point components)
+    float4 pixelColor = make_float4(pixelX / (float)width, pixelY / (float)height, 0.0f, 1.0f);
+    
+    // Convert the color values from float4s to uchar4s
+    pixelColor = make_float4(255.f, 255.f, 255.f, 255.f) * pixelColor;
+    uchar4 uchar4FinalColor = make_uchar4(pixelColor.x, pixelColor.y, pixelColor.z, pixelColor.w);
 
-  
-    *(pFloatImage + index) = Colorf32{pixelX / (float)width, pixelY/(float)height, 1.0f, 1.f};
+    // Save the result to the buffer
+    *(reinterpret_cast<uchar4*>(pBuffer) + index) = uchar4FinalColor;
 }
 
-void RayTraceScene(Image& cpuOutputImage) {
-    const size_t f32BufferSize = cpuOutputImage.GetPixelCount() * sizeof(Colorf32);
+void RayTraceScene(Image& outSurface) {
+    const size_t bufferSize = outSurface.GetPixelCount() * sizeof(Coloru8);
 
-    // allocate raw GPU Buffer
-    float* gpuImageBuffer;
-    cudaMallocManaged(&gpuImageBuffer, f32BufferSize);
+    // Allocate memory on the GPU for the render surface    
+    std::uint8_t* gpuBuffer;
+    cudaMallocManaged(&gpuBuffer, bufferSize);
 
     // Allocate 1 thread per pixel of coordinates (X,Y). Use as many blocks in the grid as needed
     // The RayTrace function will use the thread's index (both in the grid and in a block) to determine the pixel it will trace rays through
     const dim3 dimBlock = dim3(32, 32); // 32 warps of 32 threads per block
-    const dim3 dimGrid  = dim3(std::ceil(cpuOutputImage.GetWidth()  / static_cast<float>(dimBlock.x)),
-                             std::ceil(cpuOutputImage.GetHeight() / static_cast<float>(dimBlock.y)));
+    const dim3 dimGrid  = dim3(std::ceil(outSurface.GetWidth()  / static_cast<float>(dimBlock.x)),
+                               std::ceil(outSurface.GetHeight() / static_cast<float>(dimBlock.y)));
 
     // trace rays through each pixel
-    RayTrace<<<dimGrid, dimBlock>>>((Colorf32*)gpuImageBuffer, cpuOutputImage.GetWidth(), cpuOutputImage.GetHeight());
+    RayTrace<<<dimGrid, dimBlock>>>(gpuBuffer, outSurface.GetWidth(), outSurface.GetHeight());
   
     // wait for the job to finish
     cudaDeviceSynchronize();
 
     // copy the gpu buffer to a new cpu buffer
-    std::unique_ptr<float[]> cpuF32Buffer = std::make_unique<float[]>(cpuOutputImage.GetPixelCount() * 4);
-    cudaMemcpy(cpuF32Buffer.get(), gpuImageBuffer, f32BufferSize, cudaMemcpyDeviceToHost);
+    cudaMemcpy(outSurface.GetBufferPtr(), gpuBuffer, bufferSize, cudaMemcpyDeviceToHost);
 
     // free the GPU image buffer
-    cudaFree(gpuImageBuffer);
-
-    // write the image data to the image
-    for (std::uint32_t i = 0; i < cpuOutputImage.GetPixelCount(); i++) {
-        Coloru8& pixel = cpuOutputImage(i);
-        pixel.r = static_cast<std::uint8_t>(Clamp(cpuF32Buffer[i * 4 + 0] * 255.f, 0.f, 255.f));
-        pixel.g = static_cast<std::uint8_t>(Clamp(cpuF32Buffer[i * 4 + 1] * 255.f, 0.f, 255.f));
-        pixel.b = static_cast<std::uint8_t>(Clamp(cpuF32Buffer[i * 4 + 2] * 255.f, 0.f, 255.f));
-        pixel.a = static_cast<std::uint8_t>(Clamp(cpuF32Buffer[i * 4 + 3] * 255.f, 0.f, 255.f));
-    }
+    cudaFree(gpuBuffer);
 }

@@ -5,12 +5,51 @@
 #include <string>
 #include <cstdio>
 #include <cstdint>
+#include <utility>
+#include <iostream>
 
 template <typename _T>
-struct Color { _T r, g, b, a; };
+struct Vec4 {
+    union {
+        struct { _T x, y, z, w; };
+        struct { _T r, g, b, a; };
+    };
 
-typedef Color<float>        Colorf32;
-typedef Color<std::uint8_t> Coloru8;
+    template <typename _H = _T, typename _V = _T, typename _K = _T, typename _Q = _T>
+    inline Vec4(const _H& x = 0, const _V& y = 0, const _K& z = 0, const _Q& w = 0) noexcept
+        : x(x), y(y), z(z), w(w) {  }
+
+    template <typename _U> inline void operator+=(const Vec4<_U>& o) noexcept { this->x += o.x; this->y += o.y; this->z += o.z; this->w += o.w; }
+    template <typename _U> inline void operator-=(const Vec4<_U>& o) noexcept { this->x -= o.x; this->y -= o.y; this->z -= o.z; this->w -= o.w; }
+    template <typename _U> inline void operator*=(const Vec4<_U>& o) noexcept { this->x *= o.x; this->y *= o.y; this->z *= o.z; this->w *= o.w; }
+    template <typename _U> inline void operator/=(const Vec4<_U>& o) noexcept { this->x /= o.x; this->y /= o.y; this->z /= o.z; this->w /= o.w; }
+
+    template <typename _U> inline void operator+=(const _U& n) noexcept { this->x += n; this->y += n; this->z += n; this->w += n; }
+    template <typename _U> inline void operator-=(const _U& n) noexcept { this->x -= n; this->y -= n; this->z -= n; this->w -= n; }
+    template <typename _U> inline void operator*=(const _U& n) noexcept { this->x *= n; this->y *= n; this->z *= n; this->w *= n; }
+    template <typename _U> inline void operator/=(const _U& n) noexcept { this->x /= n; this->y /= n; this->z /= n; this->w /= n; }
+};
+
+template <typename _T, typename _U> inline auto operator+(const Vec4<_T>& a, const Vec4<_U>& b) noexcept -> Vec4<decltype(a.x + b.x)> { return Vec4<decltype(a.x + b.x)>{ a.x + b.x, a.y - b.y, a.z * b.z, a.w / b.w }; }
+template <typename _T, typename _U> inline auto operator-(const Vec4<_T>& a, const Vec4<_U>& b) noexcept -> Vec4<decltype(a.x - b.x)> { return Vec4<decltype(a.x - b.x)>{ a.x + b.x, a.y - b.y, a.z * b.z, a.w / b.w }; }
+template <typename _T, typename _U> inline auto operator*(const Vec4<_T>& a, const Vec4<_U>& b) noexcept -> Vec4<decltype(a.x * b.x)> { return Vec4<decltype(a.x * b.x)>{ a.x + b.x, a.y - b.y, a.z * b.z, a.w / b.w }; }
+template <typename _T, typename _U> inline auto operator/(const Vec4<_T>& a, const Vec4<_U>& b) noexcept -> Vec4<decltype(a.x / b.x)> { return Vec4<decltype(a.x / b.x)>{ a.x + b.x, a.y - b.y, a.z * b.z, a.w / b.w }; }
+
+template <typename _T, typename _U> inline auto operator+(const Vec4<_T>& a, const _U& n) noexcept -> Vec4<decltype(a.x + n)> { return Vec4<decltype(a.x + n)>{ a.x + n, a.y - n, a.z * n, a.w / n }; }
+template <typename _T, typename _U> inline auto operator-(const Vec4<_T>& a, const _U& n) noexcept -> Vec4<decltype(a.x - n)> { return Vec4<decltype(a.x - n)>{ a.x + n, a.y - n, a.z * n, a.w / n }; }
+template <typename _T, typename _U> inline auto operator*(const Vec4<_T>& a, const _U& n) noexcept -> Vec4<decltype(a.x * n)> { return Vec4<decltype(a.x * n)>{ a.x + n, a.y - n, a.z * n, a.w / n }; }
+template <typename _T, typename _U> inline auto operator/(const Vec4<_T>& a, const _U& n) noexcept -> Vec4<decltype(a.x / n)> { return Vec4<decltype(a.x / n)>{ a.x + n, a.y - n, a.z * n, a.w / n }; }
+
+template <typename _T>
+std::ostream& operator<<(std::ostream& stream, const Vec4<_T>& v) noexcept {
+    stream << '(' << v.x << ", " << v.y << ", " << v.z << ", " << v.w << ')';
+
+    return stream;
+}
+
+typedef Vec4<std::uint8_t> Coloru8;
+typedef Vec4<float>        Colorf32;
+typedef Vec4<float>        Vec4f32;
 
 class Image {
 private:
@@ -59,6 +98,6 @@ public:
         }
     }
 
-}; // Image
+}; // Image																															 \
 
 #endif // __POLAR_TRACER__COMMON_HPP
