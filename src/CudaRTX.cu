@@ -23,15 +23,15 @@ struct Vec4 {
         this->x = static_cast<_T>(x); this->y = static_cast<_T>(y); this->z = static_cast<_T>(z); this->w = static_cast<_T>(w);
     }
 
-    template <typename _U> __host__ __device__ inline void operator+=(const Vec4<_U>& o) noexcept { this->x += o.x; this->y += o.y; this->z += o.z; this->w += o.w; }
-    template <typename _U> __host__ __device__ inline void operator-=(const Vec4<_U>& o) noexcept { this->x -= o.x; this->y -= o.y; this->z -= o.z; this->w -= o.w; }
-    template <typename _U> __host__ __device__ inline void operator*=(const Vec4<_U>& o) noexcept { this->x *= o.x; this->y *= o.y; this->z *= o.z; this->w *= o.w; }
-    template <typename _U> __host__ __device__ inline void operator/=(const Vec4<_U>& o) noexcept { this->x /= o.x; this->y /= o.y; this->z /= o.z; this->w /= o.w; }
+    template <typename _U> __host__ __device__ inline Vec4<_T>& operator+=(const Vec4<_U>& o) noexcept { this->x += o.x; this->y += o.y; this->z += o.z; this->w += o.w; }
+    template <typename _U> __host__ __device__ inline Vec4<_T>& operator-=(const Vec4<_U>& o) noexcept { this->x -= o.x; this->y -= o.y; this->z -= o.z; this->w -= o.w; }
+    template <typename _U> __host__ __device__ inline Vec4<_T>& operator*=(const Vec4<_U>& o) noexcept { this->x *= o.x; this->y *= o.y; this->z *= o.z; this->w *= o.w; }
+    template <typename _U> __host__ __device__ inline Vec4<_T>& operator/=(const Vec4<_U>& o) noexcept { this->x /= o.x; this->y /= o.y; this->z /= o.z; this->w /= o.w; }
 
-    template <typename _U> __host__ __device__ inline void operator+=(const _U& n) noexcept { this->x += n; this->y += n; this->z += n; this->w += n; }
-    template <typename _U> __host__ __device__ inline void operator-=(const _U& n) noexcept { this->x -= n; this->y -= n; this->z -= n; this->w -= n; }
-    template <typename _U> __host__ __device__ inline void operator*=(const _U& n) noexcept { this->x *= n; this->y *= n; this->z *= n; this->w *= n; }
-    template <typename _U> __host__ __device__ inline void operator/=(const _U& n) noexcept { this->x /= n; this->y /= n; this->z /= n; this->w /= n; }
+    template <typename _U> __host__ __device__ inline Vec4<_T>& operator+=(const _U& n) noexcept { this->x += n; this->y += n; this->z += n; this->w += n; }
+    template <typename _U> __host__ __device__ inline Vec4<_T>& operator-=(const _U& n) noexcept { this->x -= n; this->y -= n; this->z -= n; this->w -= n; }
+    template <typename _U> __host__ __device__ inline Vec4<_T>& operator*=(const _U& n) noexcept { this->x *= n; this->y *= n; this->z *= n; this->w *= n; }
+    template <typename _U> __host__ __device__ inline Vec4<_T>& operator/=(const _U& n) noexcept { this->x /= n; this->y /= n; this->z /= n; this->w /= n; }
 };
 
 template <typename _T, typename _U> __host__ __device__ inline auto operator+(const Vec4<_T>& a, const Vec4<_U>& b) noexcept -> Vec4<decltype(a.x + b.x)> { return Vec4<decltype(a.x + b.x)>{ a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w }; }
