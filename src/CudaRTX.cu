@@ -9,6 +9,7 @@
 
 // CUDA
 #include <thrust/copy.h>
+#include <thrust/device_new.h>
 #include <thrust/host_vector.h>
 #include <thrust/device_free.h>
 #include <thrust/device_malloc.h>
@@ -61,6 +62,7 @@ namespace PolarTracer {
 
     struct Material {
         Colorf32 diffuse;
+        Colorf32 emittance;
     }; // Material
 
     struct Sphere {
@@ -131,6 +133,17 @@ namespace PolarTracer {
 
     namespace details {
 
+        struct PolarTracerNonMeshData {
+            size_t width  = 0;
+            size_t height = 0;
+
+            Camera camera{};
+            
+            // constants computed with the "camera" object
+            float cameraProjectW = 0;
+            float cameraProjectH = 0;
+        };
+
         template <typename _T>
         __device__ inline _T Clamp(const _T& x, const _T& min, const _T& max) noexcept { return min(max(x, min), max); }
 
@@ -142,7 +155,25 @@ namespace PolarTracer {
             return Colorf32(pixelX / (float)1920, pixelY / (float)1080, 0.0f, 1.0f);
         }
 
-        __global__ void RayTracingDispatcher(const thrust::device_ptr<std::uint8_t> pSurface, const size_t width, const size_t height) {
+        __device__ __host__ inline float RandomFloat() noexcept {
+            return 0.5f;
+        }
+
+        __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const thrust::device_ptr<PolarTracerNonMeshData>& pNMD) noexcept {
+            PolarTracerNonMeshData* pNMD_raw = thrust::raw_pointer_cast(pNMD);
+
+            Ray ray;
+            ray.origin    = Vec4f32(0.f, 0.f, 0.f, 0.f);
+            ray.direction = Vec4f32(
+                (2.0f  *  ((pixelX + RandomFloat()) / float(pNMD_raw->width) - 1.0f) * pNMD_raw->cameraProjectW),
+                (-2.0f * ((pixelY + RandomFloat()) / float(pNMD_raw->height) + 1.0f) * pNMD_raw->cameraProjectH),
+                1.0f,
+                0.f);
+          
+            return ray;
+        }
+
+        __global__ void RayTracingDispatcher(const thrust::device_ptr<std::uint8_t> pSurface, const size_t width, const size_t height, const thrust::device_ptr<PolarTracerNonMeshData>& pNMD) {
             // Calculate the thread's (X, Y) location
             const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
             const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
@@ -153,7 +184,7 @@ namespace PolarTracer {
             // Determine the pixel's index into the image buffer
             const size_t index = pixelX + pixelY * width;
 
-            Ray cameraRay{}; //...
+            const Ray cameraRay = GenerateCameraRay(pixelX, pixelY, pNMD);
 
             // the current pixel's color (represented with floating point components)
             Colorf32 pixelColor = RayTrace<0>(cameraRay) * 255.f;
@@ -164,7 +195,7 @@ namespace PolarTracer {
 
     }; // details
 
-    void RayTraceScene(const Image& outSurface) noexcept {
+    void RayTraceScene(const Image& outSurface, const thrust::device_ptr<details::PolarTracerNonMeshData>& pNMD) noexcept {
         const size_t bufferSize = outSurface.GetPixelCount() * sizeof(Coloru8);
 
         thrust::device_ptr<std::uint8_t> gpuBuffer = thrust::device_malloc<std::uint8_t>(bufferSize);
@@ -173,10 +204,10 @@ namespace PolarTracer {
         // The RayTrace function will use the thread's index (both in the grid and in a block) to determine the pixel it will trace rays through
         const dim3 dimBlock = dim3(32, 32); // 32 warps of 32 threads per block (=1024 threads in total which is the hardware limit)
         const dim3 dimGrid  = dim3(std::ceil(outSurface.GetWidth()  / static_cast<float>(dimBlock.x)),
-                                std::ceil(outSurface.GetHeight() / static_cast<float>(dimBlock.y)));
+                                   std::ceil(outSurface.GetHeight() / static_cast<float>(dimBlock.y)));
 
         // trace rays through each pixel
-        PolarTracer::details::RayTracingDispatcher<<<dimGrid, dimBlock>>>(gpuBuffer, outSurface.GetWidth(), outSurface.GetHeight());
+        PolarTracer::details::RayTracingDispatcher<<<dimGrid, dimBlock>>>(gpuBuffer, outSurface.GetWidth(), outSurface.GetHeight(), pNMD);
     
         // wait for the job to finish
         cudaDeviceSynchronize();
@@ -187,10 +218,50 @@ namespace PolarTracer {
         thrust::device_free(gpuBuffer);
     }
 
+    class PolarTracer {
+    private:
+        thrust::device_ptr<::PolarTracer::details::PolarTracerNonMeshData> m_pNonMeshData;
+    
+    public:
+        PolarTracer(const size_t width, const size_t height, const Camera& camera, const thrust::host_vector<Sphere>& spheres) {
+            ::PolarTracer::details::PolarTracerNonMeshData nmd{};
+            nmd.width  = width;
+            nmd.height = height;
+            nmd.camera = camera;
+            nmd.cameraProjectH = std::tan(camera.fov);
+            nmd.cameraProjectW = nmd.cameraProjectH * width / height;
+
+            this->m_pNonMeshData = thrust::device_malloc<::PolarTracer::details::PolarTracerNonMeshData>(1);
+            cudaMemcpy(thrust::raw_pointer_cast(this->m_pNonMeshData), &nmd, sizeof(nmd), cudaMemcpyHostToDevice);
+        }
+
+        inline void RayTraceScene(const Image& outSurface) {
+            ::PolarTracer::RayTraceScene(outSurface, this->m_pNonMeshData);
+        }
+
+        inline ~PolarTracer() {
+            thrust::device_free(this->m_pNonMeshData);
+        }
+    }; // PolarTracer
+
 }; // PolarTracer
 
 int main(int argc, char** argv) {
-    PolarTracer::Image image(1920, 1080);
-    PolarTracer::RayTraceScene(image);
+    const size_t WIDTH = 1920, HEIGHT = 1080;
+    PolarTracer::Image image(WIDTH, HEIGHT);
+
+    PolarTracer::Camera camera;
+    camera.position = PolarTracer::Vec4f32();
+    camera.fov      = M_PI / 4.f;
+
+    thrust::host_vector<PolarTracer::Sphere> spheres(1);
+    spheres[0].position = PolarTracer::Vec4f32{0.0f, 0.0f, 2.f, 0.f};
+    spheres[0].radius   = 0.25f;
+    spheres[0].material.diffuse   = PolarTracer::Colorf32{1.f, 0.f, 1.f, 1.f};
+    spheres[0].material.emittance = PolarTracer::Colorf32{0.f, 0.f, 0.f, 0.f};
+    
+    PolarTracer::PolarTracer pt(WIDTH, HEIGHT, camera, spheres);
+    pt.RayTraceScene(image);
+
     image.Save("frame");
 }
