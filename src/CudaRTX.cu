@@ -104,8 +104,13 @@ namespace PRTX {
             ::PRTX::CopyCount(this->m_pBegin, o.m_pBegin, this->m_count);
         }
 
-        __host__ __device__ inline ~Array() noexcept {
+        __host__ __device__ inline void Reserve(const size_t count) noexcept {
+            const auto newCount = this->count + count;
+            const auto newBegin = ::PRTX::AllocateCount<_T, _D>(this->count + newCount);
+            ::PRTX::CopyCount(newBegin, this->m_pBegin, this->count);
             ::PRTX::Free(this->m_pBegin);
+            this->m_pBegin = newBegin;
+            this->m_count  = newCount;
         }
 
         __host__ __device__ inline ::PRTX::Pointer<_T, _D> GetData()  const noexcept { return this->m_pBegin; }
@@ -115,6 +120,10 @@ namespace PRTX {
 
         __host__ __device__ inline       _T& operator[](const size_t i)       noexcept { return *(this->m_pBegin + i); }
         __host__ __device__ inline const _T& operator[](const size_t i) const noexcept { return *(this->m_pBegin + i); }
+
+        __host__ __device__ inline ~Array() noexcept {
+            ::PRTX::Free(this->m_pBegin);
+        }
     }; // Array<_T, _D>
 
     template <typename _T>
