@@ -14,7 +14,7 @@
 
 namespace PRTX {
 
-    enum class Device { CPU = 10, GPU = 100 }; // Device
+    enum class Device { CPU, GPU }; // Device
 
     template <typename _T, ::PRTX::Device _D>
     class Pointer {
@@ -88,6 +88,40 @@ namespace PRTX {
     __host__ __device__ inline void CopyCount(const ::PRTX::Pointer<_T, _D_DST>& dst, const ::PRTX::Pointer<_T, _D_SRC>& src, const size_t count) noexcept {
         ::PRTX::CopySize(dst, src, count * sizeof(_T));
     }
+
+    template <typename _T, ::PRTX::Device _D>
+    class Array {
+    private:
+        size_t m_count;
+        ::PRTX::Pointer<_T, _D> m_pBegin;
+
+    public:
+        __host__ __device__ inline Array(const size_t count) noexcept
+            : m_count(count), m_pBegin(::PRTX::AllocateCount<_T, _D>(count)) {  }
+        
+        template <::PRTX::Device _D_O>
+        __host__ __device__ inline Array(const Array<_T, _D_O>& o) noexcept : Array(o.m_count) {
+            ::PRTX::CopyCount(this->m_pBegin, o.m_pBegin, this->m_count);
+        }
+
+        __host__ __device__ inline ~Array() noexcept {
+            ::PRTX::Free(this->m_pBegin);
+        }
+
+        __host__ __device__ inline ::PRTX::Pointer<_T, _D> GetData()  const noexcept { return this->m_pBegin; }
+        __host__ __device__ inline size_t                  GetCount() const noexcept { return this->m_count;  }
+
+        __host__ __device__ inline operator ::PRTX::Pointer<_T, _D>() const noexcept { return this->m_pBegin; }
+
+        __host__ __device__ inline       _T& operator[](const size_t i)       noexcept { return *(this->m_pBegin + i); }
+        __host__ __device__ inline const _T& operator[](const size_t i) const noexcept { return *(this->m_pBegin + i); }
+    }; // Array<_T, _D>
+
+    template <typename _T>
+    using CPU_Array = Array<_T, ::PRTX::Device::CPU>;
+
+    template <typename _T>
+    using GPU_Array = Array<_T, ::PRTX::Device::GPU>;
 
     template <typename _T>
     struct Vec4 {
@@ -263,7 +297,7 @@ namespace PRTX {
             Colorf32 pixelColor = RayTrace<0>(cameraRay) * 255.f;
 
             // Save the result to the buffer
-            *(pSurface.Get() + index) = Coloru8(pixelColor.x, pixelColor.y, pixelColor.z, pixelColor.w);
+            *(pSurface + index) = Coloru8(pixelColor.x, pixelColor.y, pixelColor.z, pixelColor.w);
         }
 
     }; // details
@@ -287,8 +321,8 @@ namespace PRTX {
             this->host.m_nonMeshData.cameraProjectH = std::tan(camera.fov);
             this->host.m_nonMeshData.cameraProjectW = this->host.m_nonMeshData.cameraProjectH * width / height;
 
-            this->device.m_pRenderBuffer = PRTX::AllocateSize<Coloru8, PRTX::Device::GPU>(width * height);
-            this->device.m_pNonMeshData  = PRTX::AllocateSize<::PRTX::details::PolarTracerNonMeshData, PRTX::Device::GPU>(1);
+            this->device.m_pRenderBuffer = PRTX::AllocateCount<Coloru8, PRTX::Device::GPU>(width * height);
+            this->device.m_pNonMeshData  = PRTX::AllocateCount<::PRTX::details::PolarTracerNonMeshData, PRTX::Device::GPU>(1);
 
             const auto src = ::PRTX::CPU_PTR<::PRTX::details::PolarTracerNonMeshData>(&this->host.m_nonMeshData);
             ::PRTX::CopySize(this->device.m_pNonMeshData, src, sizeof(::PRTX::details::PolarTracerNonMeshData));
