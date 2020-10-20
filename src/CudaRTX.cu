@@ -198,27 +198,6 @@ namespace PolarTracer {
 
     }; // details
 
-    void RayTraceScene(const Image& outSurface, const thrust::device_ptr<Coloru8>& pRenderBuffer, const ::PolarTracer::details::PolarTracerNonMeshData& hostNMD, const thrust::device_ptr<details::PolarTracerNonMeshData>& pDeviceNMD) noexcept {
-        details::PolarTracerNonMeshData* pDeviceNMD_raw = thrust::raw_pointer_cast(pDeviceNMD);
-
-        const size_t bufferSize = outSurface.GetPixelCount() * sizeof(Coloru8);
-
-        // Allocate 1 thread per pixel of coordinates (X,Y). Use as many blocks in the grid as needed
-        // The RayTrace function will use the thread's index (both in the grid and in a block) to determine the pixel it will trace rays through
-        const dim3 dimBlock = dim3(32, 32); // 32 warps of 32 threads per block (=1024 threads in total which is the hardware limit)
-        const dim3 dimGrid  = dim3(std::ceil(hostNMD.width  / static_cast<float>(dimBlock.x)),
-                                   std::ceil(hostNMD.height / static_cast<float>(dimBlock.y)));
-
-        // trace rays through each pixel
-        PolarTracer::details::RayTracingDispatcher<<<dimGrid, dimBlock>>>(pRenderBuffer, pDeviceNMD);
-    
-        // wait for the job to finish
-        cudaDeviceSynchronize();
-
-        // copy the gpu buffer to a new cpu buffer
-        cudaMemcpy(outSurface.GetBufferPtr(), thrust::raw_pointer_cast(pRenderBuffer), bufferSize, cudaMemcpyDeviceToHost);
-    }
-
     class PolarTracer {
     private:
         struct {
@@ -247,7 +226,24 @@ namespace PolarTracer {
         inline void RayTraceScene(const Image& outSurface) {
             assert(outSurface.GetWidth() == this->host.m_nonMeshData.width && outSurface.GetHeight() == this->host.m_nonMeshData.height);
 
-            ::PolarTracer::RayTraceScene(outSurface, this->device.m_pRenderBuffer, this->host.m_nonMeshData, this->device.m_pNonMeshData);
+            details::PolarTracerNonMeshData* pDeviceNMD_raw = thrust::raw_pointer_cast(this->device.m_pNonMeshData);
+
+            const size_t bufferSize = outSurface.GetPixelCount() * sizeof(Coloru8);
+    
+            // Allocate 1 thread per pixel of coordinates (X,Y). Use as many blocks in the grid as needed
+            // The RayTrace function will use the thread's index (both in the grid and in a block) to determine the pixel it will trace rays through
+            const dim3 dimBlock = dim3(32, 32); // 32 warps of 32 threads per block (=1024 threads in total which is the hardware limit)
+            const dim3 dimGrid  = dim3(std::ceil(this->host.m_nonMeshData.width  / static_cast<float>(dimBlock.x)),
+                                       std::ceil(this->host.m_nonMeshData.height / static_cast<float>(dimBlock.y)));
+    
+            // trace rays through each pixel
+            ::PolarTracer::details::RayTracingDispatcher<<<dimGrid, dimBlock>>>(this->device.m_pRenderBuffer, this->device.m_pNonMeshData);
+        
+            // wait for the job to finish
+            cudaDeviceSynchronize();
+    
+            // copy the gpu buffer to a new cpu buffer
+            cudaMemcpy(outSurface.GetBufferPtr(), thrust::raw_pointer_cast(this->device.m_pRenderBuffer), bufferSize, cudaMemcpyDeviceToHost);
         }
 
         inline ~PolarTracer() {
