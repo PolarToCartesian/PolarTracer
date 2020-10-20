@@ -6,15 +6,15 @@
 namespace PRTX {
 
     struct Material {
-        Colorf32 diffuse;
-        Colorf32 emittance;
+        ::PRTX::Colorf32 diffuse;
+        ::PRTX::Colorf32 emittance;
     }; // Material
     
     struct Sphere {
-        Vec4f32 position;
+        ::PRTX::Vec4f32 position;
         float   radius;
     
-        Material material;
+        ::PRTX::Material material;
     }; // Sphere
 
 }; // namespace PRTX

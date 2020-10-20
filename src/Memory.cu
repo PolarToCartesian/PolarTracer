@@ -16,13 +16,24 @@ namespace PRTX {
         __host__ __device__ inline Pointer() noexcept {  }
 
         template <typename _U>
-        __host__ __device__ inline Pointer(_U* const p)              noexcept : m_raw(p)       { static_assert(std::is_same<_T, _U>::value); }
-        __host__ __device__ inline Pointer(const Pointer<_T, _D>& o) noexcept : m_raw(o.m_raw) {  }
+        __host__ __device__ inline Pointer(_U* const p) noexcept
+          : m_raw(p)
+        {
+          static_assert(std::is_same<_T, _U>::value);
+        }
+
+        __host__ __device__ inline Pointer(const Pointer<_T, _D>& o) noexcept
+          : m_raw(o.m_raw)
+        {  }
 
         __host__ __device__ inline _T* Get() const noexcept { return this->m_raw; }
 
         template <typename _U = _T>
-        __host__ __device__ inline void operator=(_U* const p)                      noexcept { this->m_raw = p;       static_assert(std::is_same<_T, _U>::value); }
+        __host__ __device__ inline void operator=(_U* const p) noexcept {
+          this->m_raw = p; 
+          static_assert(std::is_same<_T, _U>::value);
+        }
+        
         __host__ __device__ inline void operator=(const ::PRTX::Pointer<_T, _D>& o) noexcept { this->m_raw = o.m_raw; }
 
         __host__ __device__ inline operator _T*&      ()       noexcept { return this->m_raw; }
@@ -63,7 +74,10 @@ namespace PRTX {
     }
 
     template <typename _T, ::PRTX::Device _D_DST, ::PRTX::Device _D_SRC>
-    __host__ __device__ inline void CopySize(const ::PRTX::Pointer<_T, _D_DST>& dst, const ::PRTX::Pointer<_T, _D_SRC>& src, const size_t size) noexcept {
+    __host__ __device__ inline void CopySize(const ::PRTX::Pointer<_T, _D_DST>& dst,
+                                             const ::PRTX::Pointer<_T, _D_SRC>& src,
+                                             const size_t size) noexcept
+    {
         if constexpr (_D_SRC == ::PRTX::Device::CPU && _D_DST == ::PRTX::Device::CPU) {
             cudaMemcpy(dst, src, size, cudaMemcpyKind::cudaMemcpyHostToHost);
         } else if constexpr (_D_SRC == ::PRTX::Device::GPU && _D_DST == ::PRTX::Device::GPU) {
@@ -76,7 +90,10 @@ namespace PRTX {
     }
 
     template <typename _T, ::PRTX::Device _D_DST, ::PRTX::Device _D_SRC>
-    __host__ __device__ inline void CopyCount(const ::PRTX::Pointer<_T, _D_DST>& dst, const ::PRTX::Pointer<_T, _D_SRC>& src, const size_t count) noexcept {
+    __host__ __device__ inline void CopyCount(const ::PRTX::Pointer<_T, _D_DST>& dst,
+                                              const ::PRTX::Pointer<_T, _D_SRC>& src,
+                                              const size_t count) noexcept
+    {
         ::PRTX::CopySize(dst, src, count * sizeof(_T));
     }
 
@@ -90,10 +107,13 @@ namespace PRTX {
         __host__ __device__ inline Array() noexcept = default;
 
         __host__ __device__ inline Array(const size_t count) noexcept
-            : m_count(count), m_pBegin(::PRTX::AllocateCount<_T, _D>(count)) {  }
+            : m_count(count), m_pBegin(::PRTX::AllocateCount<_T, _D>(count))
+        {  }
         
         template <::PRTX::Device _D_O>
-        __host__ __device__ inline Array(const Array<_T, _D_O>& o) noexcept : Array(o.m_count) {
+        __host__ __device__ inline Array(const Array<_T, _D_O>& o) noexcept
+          : Array(o.m_count)
+        {
             ::PRTX::CopyCount(this->m_pBegin, o.m_pBegin, this->m_count);
         }
 
@@ -113,8 +133,10 @@ namespace PRTX {
         __host__ __device__ inline void Reserve(const size_t count) noexcept {
             const auto newCount = this->count + count;
             const auto newBegin = ::PRTX::AllocateCount<_T, _D>(this->count + newCount);
+
             ::PRTX::CopyCount(newBegin, this->m_pBegin, this->count);
             ::PRTX::Free(this->m_pBegin);
+
             this->m_pBegin = newBegin;
             this->m_count  = newCount;
         }

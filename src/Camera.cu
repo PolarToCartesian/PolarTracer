@@ -7,7 +7,7 @@ namespace PRTX {
 
     struct Camera {
         float   fov;
-        Vec4f32 position;
+        ::PRTX::Vec4f32 position;
     }; // Camera
 
 }; // namespace PRTX

@@ -21,8 +21,11 @@ namespace PRTX {
         __host__ __device__ inline Image() = default;
 
         __host__ __device__ inline Image(const std::uint16_t width, const std::uint16_t height) noexcept 
-            : m_width(width), m_height(height), m_nPixels(static_cast<std::uint32_t>(width) * height),
-              m_pArray(::PRTX::Array<_T, _D>(this->m_nPixels)) { }
+            : m_width(width),
+              m_height(height),
+              m_nPixels(static_cast<std::uint32_t>(width) * height),
+              m_pArray(::PRTX::Array<_T, _D>(this->m_nPixels))
+        { }
 
         __host__ __device__ inline std::uint16_t GetWidth()      const noexcept { return this->m_width;   }
         __host__ __device__ inline std::uint16_t GetHeight()     const noexcept { return this->m_height;  }
