@@ -106,6 +106,20 @@ namespace PRTX {
       return Vec4<decltype(a.x / n)>{ a.x / n, a.y / n, a.z / n, a.w / n };
     }
 
+    
+
+    template <typename _T, typename _U>
+    __host__ __device__ inline auto operator+(const _U& n, const Vec4<_T>& a) { return a * n; }
+
+    template <typename _T, typename _U>
+    __host__ __device__ inline auto operator-(const _U& n, const Vec4<_T>& a) { return a * n; }
+
+    template <typename _T, typename _U>
+    __host__ __device__ inline auto operator*(const _U& n, const Vec4<_T>& a) { return a * n; }
+
+    template <typename _T, typename _U>
+    __host__ __device__ inline auto operator/(const _U& n, const Vec4<_T>& a) { return a * n; }
+
     template <typename _T>
     std::ostream& operator<<(std::ostream& stream, const Vec4<_T>& v) noexcept {
         stream << '(' << v.x << ", " << v.y << ", " << v.z << ", " << v.w << ')';
