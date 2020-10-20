@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <utility>
 #include <iostream>
+#include <type_traits>
 
 // CUDA
 #include <thrust/copy.h>
@@ -18,6 +19,46 @@
 #define MAX_DEPTH 5
 
 namespace PolarTracer {
+
+    namespace GPU {
+        template <typename _T>
+        class Pointer {
+        private:
+            _T* m_raw = nullptr;
+        public:
+            __host__ __device__ inline Pointer() noexcept {  }
+
+            template <typename _U>
+            __host__ __device__ inline Pointer(_U* const p)          noexcept : m_raw(p)       { static_assert(std::is_same<_T, _U>::value); }
+            __host__ __device__ inline Pointer(const Pointer<_T>& o) noexcept : m_raw(o.m_raw) {  }
+
+            __host__ __device__ inline _T* Get() const noexcept { return this->m_raw; }
+
+            template <typename _U = _T>
+            __host__ __device__ inline void operator=(_U* const p)          noexcept { this->m_raw = p;      static_assert(std::is_same<_T, _U>::value); }
+            __host__ __device__ inline void operator=(const Pointer<_T>& o) noexcept { this->m_raw = o.m_raw; }
+
+            __host__ __device__ inline operator _T*&      ()       noexcept { return this->m_raw; }
+            __host__ __device__ inline operator _T* const&() const noexcept { return this->m_raw; }
+
+            __host__ __device__ inline _T* operator->() const noexcept { return this->m_raw; }
+        }; // Pointer<_T>
+
+        template <typename _T>
+        __host__ __device__ inline Pointer<_T> Allocate(const size_t count) noexcept {
+            _T* p;
+            cudaMalloc(&p, count * sizeof(_T));
+            return Pointer<_T>(p);
+        }
+
+        template <typename _T>
+        __host__ __device__ inline void Free(const Pointer<_T>& p) noexcept {
+            cudaFree(reinterpret_cast<void*>(p.Get()));
+        }
+    }; // GPU
+
+    template <typename _T>
+    using gpu_ptr = typename ::PolarTracer::GPU::Pointer<_T>;
 
     template <typename _T>
     struct Vec4 {
@@ -159,14 +200,12 @@ namespace PolarTracer {
             return 0.5f;
         }
 
-        __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const thrust::device_ptr<PolarTracerNonMeshData>& pDeviceNMD) noexcept {
-            PolarTracerNonMeshData* pDeviceNMD_raw = thrust::raw_pointer_cast(pDeviceNMD);
-
+        __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const gpu_ptr<PolarTracerNonMeshData>& pDeviceNMD) noexcept {
             Ray ray;
             ray.origin    = Vec4f32(0.f, 0.f, 0.f, 0.f);
             ray.direction = Vec4f32(
-                (2.0f  * ((pixelX + RandomFloat()) / float(pDeviceNMD_raw->width)  - 1.0f) * pDeviceNMD_raw->cameraProjectW),
-                (-2.0f * ((pixelY + RandomFloat()) / float(pDeviceNMD_raw->height) + 1.0f) * pDeviceNMD_raw->cameraProjectH),
+                (2.0f  * ((pixelX + RandomFloat()) / float(pDeviceNMD->width)  - 1.0f) * pDeviceNMD->cameraProjectW),
+                (-2.0f * ((pixelY + RandomFloat()) / float(pDeviceNMD->height) + 1.0f) * pDeviceNMD->cameraProjectH),
                 1.0f,
                 0.f);
           
@@ -174,18 +213,16 @@ namespace PolarTracer {
         }
 
         // Can't pass arguments via const& because these variables exist on the host and not on the device
-        __global__ void RayTracingDispatcher(const thrust::device_ptr<Coloru8> pSurface, const thrust::device_ptr<PolarTracerNonMeshData> pDeviceNMD) {
-            PolarTracerNonMeshData* pDeviceNMD_raw = thrust::raw_pointer_cast(pDeviceNMD);
-
+        __global__ void RayTracingDispatcher(const gpu_ptr<Coloru8> pSurface, const gpu_ptr<PolarTracerNonMeshData> pDeviceNMD) {
             // Calculate the thread's (X, Y) location
             const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
             const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
 
             // Bounds check
-            if (pixelX >= pDeviceNMD_raw->width || pixelY >= pDeviceNMD_raw->height) return;
+            if (pixelX >= pDeviceNMD->width || pixelY >= pDeviceNMD->height) return;
 
             // Determine the pixel's index into the image buffer
-            const size_t index = pixelX + pixelY * pDeviceNMD_raw->width;
+            const size_t index = pixelX + pixelY * pDeviceNMD->width;
 
             const Ray cameraRay = GenerateCameraRay(pixelX, pixelY, pDeviceNMD);
 
@@ -193,7 +230,7 @@ namespace PolarTracer {
             Colorf32 pixelColor = RayTrace<0>(cameraRay) * 255.f;
 
             // Save the result to the buffer
-            *(thrust::raw_pointer_cast(pSurface) + index) = Coloru8(pixelColor.x, pixelColor.y, pixelColor.z, pixelColor.w);
+            *(pSurface.Get() + index) = Coloru8(pixelColor.x, pixelColor.y, pixelColor.z, pixelColor.w);
         }
 
     }; // details
@@ -205,8 +242,8 @@ namespace PolarTracer {
         } host;
 
         struct {
-            thrust::device_ptr<Coloru8> m_pRenderBuffer;
-            thrust::device_ptr<::PolarTracer::details::PolarTracerNonMeshData> m_pNonMeshData;
+            gpu_ptr<Coloru8> m_pRenderBuffer;
+            gpu_ptr<::PolarTracer::details::PolarTracerNonMeshData> m_pNonMeshData;
         } device;
     
     public:
@@ -217,16 +254,13 @@ namespace PolarTracer {
             this->host.m_nonMeshData.cameraProjectH = std::tan(camera.fov);
             this->host.m_nonMeshData.cameraProjectW = this->host.m_nonMeshData.cameraProjectH * width / height;
 
-            this->device.m_pRenderBuffer = thrust::device_malloc<Coloru8>(width * height);
-
-            this->device.m_pNonMeshData = thrust::device_malloc<::PolarTracer::details::PolarTracerNonMeshData>(1);
-            cudaMemcpy(thrust::raw_pointer_cast(this->device.m_pNonMeshData), &this->host.m_nonMeshData, sizeof(::PolarTracer::details::PolarTracerNonMeshData), cudaMemcpyHostToDevice);
+            this->device.m_pRenderBuffer = GPU::Allocate<Coloru8>(width * height);
+            this->device.m_pNonMeshData  = GPU::Allocate<::PolarTracer::details::PolarTracerNonMeshData>(1);
+            cudaMemcpy(this->device.m_pNonMeshData, &this->host.m_nonMeshData, sizeof(::PolarTracer::details::PolarTracerNonMeshData), cudaMemcpyHostToDevice);
         }
 
         inline void RayTraceScene(const Image& outSurface) {
             assert(outSurface.GetWidth() == this->host.m_nonMeshData.width && outSurface.GetHeight() == this->host.m_nonMeshData.height);
-
-            details::PolarTracerNonMeshData* pDeviceNMD_raw = thrust::raw_pointer_cast(this->device.m_pNonMeshData);
 
             const size_t bufferSize = outSurface.GetPixelCount() * sizeof(Coloru8);
     
@@ -243,12 +277,12 @@ namespace PolarTracer {
             cudaDeviceSynchronize();
     
             // copy the gpu buffer to a new cpu buffer
-            cudaMemcpy(outSurface.GetBufferPtr(), thrust::raw_pointer_cast(this->device.m_pRenderBuffer), bufferSize, cudaMemcpyDeviceToHost);
+            cudaMemcpy(outSurface.GetBufferPtr(), this->device.m_pRenderBuffer, bufferSize, cudaMemcpyDeviceToHost);
         }
 
         inline ~PolarTracer() {
-            thrust::device_free(this->device.m_pRenderBuffer);
-            thrust::device_free(this->device.m_pNonMeshData);
+            GPU::Free(this->device.m_pRenderBuffer);
+            GPU::Free(this->device.m_pNonMeshData);
         }
     }; // PolarTracer
 
