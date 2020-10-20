@@ -1,64 +1,74 @@
 // LIBC
 #include <cmath>
+#include <vector>
 #include <memory>
 #include <string>
 #include <cstdio>
+#include <cassert>
 #include <cstdint>
 #include <utility>
 #include <iostream>
 #include <type_traits>
 
-// CUDA
-#include <thrust/copy.h>
-#include <thrust/device_new.h>
-#include <thrust/host_vector.h>
-#include <thrust/device_free.h>
-#include <thrust/device_malloc.h>
-#include <thrust/device_vector.h>
-
 #define MAX_DEPTH 5
 
-namespace PolarTracer {
+namespace PRTX {
 
-    namespace GPU {
-        template <typename _T>
-        class Pointer {
-        private:
-            _T* m_raw = nullptr;
-        public:
-            __host__ __device__ inline Pointer() noexcept {  }
+    enum class Device { CPU = 10, GPU = 100 }; // Device
 
-            template <typename _U>
-            __host__ __device__ inline Pointer(_U* const p)          noexcept : m_raw(p)       { static_assert(std::is_same<_T, _U>::value); }
-            __host__ __device__ inline Pointer(const Pointer<_T>& o) noexcept : m_raw(o.m_raw) {  }
+    template <typename _T, ::PRTX::Device _D>
+    class Pointer {
+    private:
+        _T* m_raw = nullptr;
+        
+    public:
+        __host__ __device__ inline Pointer() noexcept {  }
 
-            __host__ __device__ inline _T* Get() const noexcept { return this->m_raw; }
+        template <typename _U>
+        __host__ __device__ inline Pointer(_U* const p)              noexcept : m_raw(p)       { static_assert(std::is_same<_T, _U>::value); }
+        __host__ __device__ inline Pointer(const Pointer<_T, _D>& o) noexcept : m_raw(o.m_raw) {  }
 
-            template <typename _U = _T>
-            __host__ __device__ inline void operator=(_U* const p)          noexcept { this->m_raw = p;      static_assert(std::is_same<_T, _U>::value); }
-            __host__ __device__ inline void operator=(const Pointer<_T>& o) noexcept { this->m_raw = o.m_raw; }
+        __host__ __device__ inline _T* Get() const noexcept { return this->m_raw; }
 
-            __host__ __device__ inline operator _T*&      ()       noexcept { return this->m_raw; }
-            __host__ __device__ inline operator _T* const&() const noexcept { return this->m_raw; }
+        template <typename _U = _T>
+        __host__ __device__ inline void operator=(_U* const p)                      noexcept { this->m_raw = p;       static_assert(std::is_same<_T, _U>::value); }
+        __host__ __device__ inline void operator=(const ::PRTX::Pointer<_T, _D>& o) noexcept { this->m_raw = o.m_raw; }
 
-            __host__ __device__ inline _T* operator->() const noexcept { return this->m_raw; }
-        }; // Pointer<_T>
+        __host__ __device__ inline operator _T*&      ()       noexcept { return this->m_raw; }
+        __host__ __device__ inline operator _T* const&() const noexcept { return this->m_raw; }
 
-        template <typename _T>
-        __host__ __device__ inline Pointer<_T> Allocate(const size_t count) noexcept {
-            _T* p;
-            cudaMalloc(&p, count * sizeof(_T));
-            return Pointer<_T>(p);
-        }
-
-        template <typename _T>
-        __host__ __device__ inline void Free(const Pointer<_T>& p) noexcept {
-            cudaFree(reinterpret_cast<void*>(p.Get()));
-        }
-    }; // GPU
+        __host__ __device__ inline _T* operator->() const noexcept { return this->m_raw; }
+    }; // Pointer<_T>
 
     template <typename _T>
-    using gpu_ptr = typename ::PolarTracer::GPU::Pointer<_T>;
+    using CPU_PTR = ::PRTX::Pointer<_T, ::PRTX::Device::CPU>;
+
+    template <typename _T>
+    using GPU_PTR = ::PRTX::Pointer<_T, ::PRTX::Device::GPU>;
+
+    template <typename _T, ::PRTX::Device _D>
+    __host__ __device__ ::PRTX::Pointer<_T, _D> Allocate(const size_t count) noexcept {
+        if constexpr (_D == ::PRTX::Device::CPU) {
+            return ::PRTX::CPU_PTR<_T>(reinterpret_cast<_T*>(std::malloc(count * sizeof(_T))));
+        } else {
+            _T* p;
+            cudaMalloc(&p, count * sizeof(_T));
+            return ::PRTX::GPU_PTR<_T>(p);
+        }
+    }
+
+    template <typename _T, ::PRTX::Device _D>
+    __host__ __device__ void Free(const ::PRTX::Pointer<_T, _D>& p) noexcept {
+        if constexpr (_D == ::PRTX::Device::CPU) {
+            std::free(p);
+        } else {
+            cudaFree(reinterpret_cast<void*>(p.Get()));
+        }
+    }
+
+}; // PRTX
+
+namespace PolarTracer {
 
     template <typename _T>
     struct Vec4 {
@@ -200,7 +210,7 @@ namespace PolarTracer {
             return 0.5f;
         }
 
-        __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const gpu_ptr<PolarTracerNonMeshData>& pDeviceNMD) noexcept {
+        __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const ::PRTX::GPU_PTR<PolarTracerNonMeshData>& pDeviceNMD) noexcept {
             Ray ray;
             ray.origin    = Vec4f32(0.f, 0.f, 0.f, 0.f);
             ray.direction = Vec4f32(
@@ -213,7 +223,7 @@ namespace PolarTracer {
         }
 
         // Can't pass arguments via const& because these variables exist on the host and not on the device
-        __global__ void RayTracingDispatcher(const gpu_ptr<Coloru8> pSurface, const gpu_ptr<PolarTracerNonMeshData> pDeviceNMD) {
+        __global__ void RayTracingDispatcher(const PRTX::GPU_PTR<Coloru8> pSurface, const PRTX::GPU_PTR<PolarTracerNonMeshData> pDeviceNMD) {
             // Calculate the thread's (X, Y) location
             const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
             const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
@@ -242,20 +252,20 @@ namespace PolarTracer {
         } host;
 
         struct {
-            gpu_ptr<Coloru8> m_pRenderBuffer;
-            gpu_ptr<::PolarTracer::details::PolarTracerNonMeshData> m_pNonMeshData;
+            PRTX::GPU_PTR<Coloru8> m_pRenderBuffer;
+            PRTX::GPU_PTR<::PolarTracer::details::PolarTracerNonMeshData> m_pNonMeshData;
         } device;
     
     public:
-        PolarTracer(const size_t width, const size_t height, const Camera& camera, const thrust::host_vector<Sphere>& spheres) {
+        PolarTracer(const size_t width, const size_t height, const Camera& camera, const std::vector<Sphere>& spheres) {
             this->host.m_nonMeshData.width  = width;
             this->host.m_nonMeshData.height = height;
             this->host.m_nonMeshData.camera = camera;
             this->host.m_nonMeshData.cameraProjectH = std::tan(camera.fov);
             this->host.m_nonMeshData.cameraProjectW = this->host.m_nonMeshData.cameraProjectH * width / height;
 
-            this->device.m_pRenderBuffer = GPU::Allocate<Coloru8>(width * height);
-            this->device.m_pNonMeshData  = GPU::Allocate<::PolarTracer::details::PolarTracerNonMeshData>(1);
+            this->device.m_pRenderBuffer = PRTX::Allocate<Coloru8, PRTX::Device::GPU>(width * height);
+            this->device.m_pNonMeshData  = PRTX::Allocate<::PolarTracer::details::PolarTracerNonMeshData, PRTX::Device::GPU>(1);
             cudaMemcpy(this->device.m_pNonMeshData, &this->host.m_nonMeshData, sizeof(::PolarTracer::details::PolarTracerNonMeshData), cudaMemcpyHostToDevice);
         }
 
@@ -281,8 +291,8 @@ namespace PolarTracer {
         }
 
         inline ~PolarTracer() {
-            GPU::Free(this->device.m_pRenderBuffer);
-            GPU::Free(this->device.m_pNonMeshData);
+            ::PRTX::Free<Coloru8, ::PRTX::Device::GPU>(this->device.m_pRenderBuffer);
+            ::PRTX::Free<::PolarTracer::details::PolarTracerNonMeshData, ::PRTX::Device::GPU>(this->device.m_pNonMeshData);
         }
     }; // PolarTracer
 
@@ -296,7 +306,7 @@ int main(int argc, char** argv) {
     camera.position = PolarTracer::Vec4f32();
     camera.fov      = M_PI / 4.f;
 
-    thrust::host_vector<PolarTracer::Sphere> spheres(1);
+    std::vector<PolarTracer::Sphere> spheres(1);
     spheres[0].position = PolarTracer::Vec4f32{0.0f, 0.0f, 2.f, 0.f};
     spheres[0].radius   = 0.25f;
     spheres[0].material.diffuse   = PolarTracer::Colorf32{1.f, 0.f, 1.f, 1.f};
