@@ -31,7 +31,7 @@ namespace PRTX {
         __host__ __device__ inline std::uint16_t GetHeight()     const noexcept { return this->m_height;  }
         __host__ __device__ inline std::uint32_t GetPixelCount() const noexcept { return this->m_nPixels; }
 
-        __host__ __device__ inline ::PRTX::Pointer<_T, _D> GetData() const noexcept { return this->m_pArray; }
+        __host__ __device__ inline ::PRTX::Pointer<_T, _D> GetPtr() const noexcept { return this->m_pArray; }
 
         __host__ __device__ inline       _T& operator()(const size_t i)       noexcept { return this->m_pArray[i]; }
         __host__ __device__ inline const _T& operator()(const size_t i) const noexcept { return this->m_pArray[i]; }
@@ -52,7 +52,7 @@ namespace PRTX {
             std::fprintf(fp, "P7\nWIDTH %d\nHEIGHT %d\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", image.GetWidth(), image.GetHeight());
 
             // Write Contents
-            std::fwrite(image.GetData(), image.GetPixelCount() * sizeof(Coloru8), 1u, fp);
+            std::fwrite(image.GetPtr(), image.GetPixelCount() * sizeof(Coloru8), 1u, fp);
 
             // Close
             std::fclose(fp);
