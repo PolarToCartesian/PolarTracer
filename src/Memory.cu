@@ -65,6 +65,11 @@ namespace PRTX {
     }
 
     template <typename _T, ::PRTX::Device _D>
+    __host__ __device__ inline ::PRTX::Pointer<_T, _D> AllocateSingle() noexcept {
+        return ::PRTX::AllocateSize<_T, _D>(sizeof(_T));
+    }
+
+    template <typename _T, ::PRTX::Device _D>
     __host__ __device__ inline void Free(const ::PRTX::Pointer<_T, _D>& p) noexcept {
         if constexpr (_D == ::PRTX::Device::CPU) {
             std::free(p);
@@ -95,6 +100,13 @@ namespace PRTX {
                                               const size_t count) noexcept
     {
         ::PRTX::CopySize(dst, src, count * sizeof(_T));
+    }
+
+    template <typename _T, ::PRTX::Device _D_DST, ::PRTX::Device _D_SRC>
+    __host__ __device__ inline void CopySingle(const ::PRTX::Pointer<_T, _D_DST>& dst,
+                                               const ::PRTX::Pointer<_T, _D_SRC>& src) noexcept
+    {
+        ::PRTX::CopySize(dst, src, sizeof(_T));
     }
 
     template <typename _T, ::PRTX::Device _D>

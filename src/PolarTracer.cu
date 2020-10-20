@@ -61,10 +61,10 @@ namespace PRTX {
             : host{renderParams}
         {
             this->device.m_frameBuffer   = ::PRTX::Image<Coloru8, ::PRTX::Device::GPU>(renderParams.width, renderParams.height);
-            this->device.m_pRenderParams = ::PRTX::AllocateCount<::PRTX::RenderParams, PRTX::Device::GPU>(1);
+            this->device.m_pRenderParams = ::PRTX::AllocateSingle<::PRTX::RenderParams, PRTX::Device::GPU>();
 
             const auto src = ::PRTX::CPU_ptr<::PRTX::RenderParams>(&this->host.m_renderParams);
-            ::PRTX::CopySize(this->device.m_pRenderParams, src, sizeof(::PRTX::RenderParams)); // TODO:: use CopyCount
+            ::PRTX::CopySingle(this->device.m_pRenderParams, src);
         }
 
         inline void RayTraceScene(const ::PRTX::Image<::PRTX::Coloru8, ::PRTX::Device::CPU>& outSurface) {
