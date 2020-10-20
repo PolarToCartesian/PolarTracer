@@ -106,7 +106,6 @@ namespace PRTX {
       return Vec4<decltype(a.x / n)>{ a.x / n, a.y / n, a.z / n, a.w / n };
     }
 
-    
 
     template <typename _T, typename _U>
     __host__ __device__ inline auto operator+(const _U& n, const Vec4<_T>& a) { return a * n; }
@@ -127,13 +126,13 @@ namespace PRTX {
         return stream;
     }
 
-    typedef Vec4<std::uint8_t> Coloru8;
-    typedef Vec4<float>        Colorf32;
-    typedef Vec4<float>        Vec4f32;
+    typedef ::PRTX::Vec4<std::uint8_t> Coloru8;
+    typedef ::PRTX::Vec4<float>        Colorf32;
+    typedef ::PRTX::Vec4<float>        Vec4f32;
 
     struct Ray {
-        Vec4f32 origin;
-        Vec4f32 direction;
+        ::PRTX::Vec4f32 origin;
+        ::PRTX::Vec4f32 direction;
     }; // Ray
 
 }; // PRTX

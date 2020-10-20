@@ -13,7 +13,7 @@
 namespace PRTX {
 
     template <size_t _N>
-    __device__ Colorf32 RayTrace(const Ray& ray, const PRTX::GPU_ptr<::PRTX::RenderParams> pParams) {
+    __device__ Colorf32 RayTrace(const Ray& ray, const PRTX::GPU_Ptr<::PRTX::RenderParams> pParams) {
         bool bIntersected = false;
 
         if (bIntersected) {
@@ -29,7 +29,8 @@ namespace PRTX {
     }
 
     // Can't pass arguments via const& because these variables exist on the host and not on the device
-    __global__ void RayTracingDispatcher(const ::PRTX::Pointer<Coloru8, ::PRTX::Device::GPU> pSurface, const PRTX::GPU_ptr<::PRTX::RenderParams> pParams) {
+    __global__ void RayTracingDispatcher(const ::PRTX::GPU_Ptr<Coloru8> pSurface,
+                                         const ::PRTX::GPU_Ptr<::PRTX::RenderParams> pParams) {
         // Calculate the thread's (X, Y) location
         const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
         const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
@@ -57,7 +58,8 @@ namespace PRTX {
 
         struct {
             ::PRTX::Image<Coloru8, ::PRTX::Device::GPU> m_frameBuffer;
-            ::PRTX::GPU_ptr<::PRTX::RenderParams> m_pRenderParams;
+            ::PRTX::GPU_Ptr<::PRTX::RenderParams> m_pRenderParams;
+            ::PRTX::GPU_Array<::PRTX::Sphere>     m_spheres;
         } device;
     
     public:
@@ -66,15 +68,16 @@ namespace PRTX {
         {
             this->device.m_frameBuffer   = ::PRTX::Image<Coloru8, ::PRTX::Device::GPU>(renderParams.width, renderParams.height);
             this->device.m_pRenderParams = ::PRTX::AllocateSingle<::PRTX::RenderParams, PRTX::Device::GPU>();
+            this->device.m_spheres       = ::PRTX::GPU_Array<::PRTX::Sphere>(spheres);
 
-            const auto src = ::PRTX::CPU_ptr<::PRTX::RenderParams>(&this->host.m_renderParams);
+            const auto src = ::PRTX::CPU_Ptr<::PRTX::RenderParams>(&this->host.m_renderParams);
             ::PRTX::CopySingle(this->device.m_pRenderParams, src);
         }
 
         inline void RayTraceScene(const ::PRTX::Image<::PRTX::Coloru8, ::PRTX::Device::CPU>& outSurface) {
             assert(outSurface.GetWidth() == this->host.m_renderParams.width && outSurface.GetHeight() == this->host.m_renderParams.height);
 
-            const size_t bufferSize = outSurface.GetPixelCount() * sizeof(Coloru8);
+            const size_t bufferSize = outSurface.GetPixelCount() * sizeof(::PRTX::Coloru8);
     
             // Allocate 1 thread per pixel of coordinates (X,Y). Use as many blocks in the grid as needed
             // The RayTrace function will use the thread's index (both in the grid and in a block) to determine the pixel it will trace rays through

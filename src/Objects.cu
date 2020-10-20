@@ -17,6 +17,13 @@ namespace PRTX {
         ::PRTX::Material material;
     }; // Sphere
 
+    struct Intersection {
+        ::PRTX::Ray      inRay;    // incoming ray
+        float            t;        // distance from the ray's origin to intersection point
+        ::PRTX::Ray      normal;   // normal at intersection point
+        ::PRTX::Material material; // the material that the intersected object is made of      ::      
+    }; // Intersection
+
 }; // namespace PRTX
 
 #endif // __PRTX__OBJECTS_CU

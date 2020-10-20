@@ -43,19 +43,19 @@ namespace PRTX {
     }; // Pointer<_T>
 
     template <typename _T>
-    using CPU_ptr = ::PRTX::Pointer<_T, ::PRTX::Device::CPU>;
+    using CPU_Ptr = ::PRTX::Pointer<_T, ::PRTX::Device::CPU>;
 
     template <typename _T>
-    using GPU_ptr = ::PRTX::Pointer<_T, ::PRTX::Device::GPU>;
+    using GPU_Ptr = ::PRTX::Pointer<_T, ::PRTX::Device::GPU>;
 
     template <typename _T, ::PRTX::Device _D>
     __host__ __device__ inline ::PRTX::Pointer<_T, _D> AllocateSize(const size_t size) noexcept {
         if constexpr (_D == ::PRTX::Device::CPU) {
-            return ::PRTX::CPU_ptr<_T>(reinterpret_cast<_T*>(std::malloc(size)));
+            return ::PRTX::CPU_Ptr<_T>(reinterpret_cast<_T*>(std::malloc(size)));
         } else {
             _T* p;
             cudaMalloc(&p, size);
-            return ::PRTX::GPU_ptr<_T>(p);
+            return ::PRTX::GPU_Ptr<_T>(p);
         }
     }
 
@@ -110,34 +110,48 @@ namespace PRTX {
     }
 
     template <typename _T, ::PRTX::Device _D>
-    class Array {
-    private:
-        size_t m_count = 0;
-        ::PRTX::Pointer<_T, _D> m_pBegin;
+    class ArraySpan {
+    public:
+        size_t count = 0;
+        ::PRTX::Pointer<_T, _D> pBegin;
+    };
 
+    template <typename _T>
+    using CPU_ArraySpan = ArraySpan<_T, ::PRTX::Device::CPU>;
+
+    template <typename _T>
+    using GPU_ArraySpan = ArraySpan<_T, ::PRTX::Device::GPU>;
+
+    template <typename _T, ::PRTX::Device _D>
+    class Array : private ArraySpan<_T, _D> {
     public:
         __host__ __device__ inline Array() noexcept = default;
 
-        __host__ __device__ inline Array(const size_t count) noexcept
-            : m_count(count), m_pBegin(::PRTX::AllocateCount<_T, _D>(count))
-        {  }
+        __host__ __device__ inline Array(const size_t count) noexcept {
+            this->count  = count;
+            this->pBegin = ::PRTX::AllocateCount<_T, _D>(count);
+        }
         
         template <::PRTX::Device _D_O>
         __host__ __device__ inline Array(const Array<_T, _D_O>& o) noexcept
-          : Array(o.m_count)
+          : Array(o.GetCount())
         {
-            ::PRTX::CopyCount(this->m_pBegin, o.m_pBegin, this->m_count);
+            ::PRTX::CopyCount(this->pBegin, o.GetData(), this->count);
         }
 
         __host__ __device__ inline Array(Array<_T, _D>&& o) noexcept
-            : m_count(o.m_count), m_pBegin(o.m_pBegin)
-        {  }
+        {
+            this->count  = o.count;
+            o.count      = 0;
+            this->pBegin = o.pBegin;
+            o.pBegin     = (_T*)nullptr;
+        }
 
         __host__ __device__ inline Array<_T, _D>& operator=(Array<_T, _D>&& o) noexcept {
-            this->m_count   = o.m_count;
-            o.m_count       = 0;
-            this->m_pBegin  = o.m_pBegin;
-            o.m_pBegin      = (_T*)nullptr;
+            this->count  = o.count;
+            o.count      = 0;
+            this->pBegin = o.pBegin;
+            o.pBegin     = (_T*)nullptr;
 
             return *this;
         }
@@ -146,23 +160,23 @@ namespace PRTX {
             const auto newCount = this->count + count;
             const auto newBegin = ::PRTX::AllocateCount<_T, _D>(this->count + newCount);
 
-            ::PRTX::CopyCount(newBegin, this->m_pBegin, this->count);
-            ::PRTX::Free(this->m_pBegin);
+            ::PRTX::CopyCount(newBegin, this->pBegin, this->count);
+            ::PRTX::Free(this->pBegin);
 
-            this->m_pBegin = newBegin;
-            this->m_count  = newCount;
+            this->pBegin = newBegin;
+            this->count  = newCount;
         }
 
-        __host__ __device__ inline ::PRTX::Pointer<_T, _D> GetData()  const noexcept { return this->m_pBegin; }
-        __host__ __device__ inline size_t                  GetCount() const noexcept { return this->m_count;  }
+        __host__ __device__ inline ::PRTX::Pointer<_T, _D> GetData()  const noexcept { return this->pBegin; }
+        __host__ __device__ inline size_t                  GetCount() const noexcept { return this->count;  }
 
-        __host__ __device__ inline operator ::PRTX::Pointer<_T, _D>() const noexcept { return this->m_pBegin; }
+        __host__ __device__ inline operator ::PRTX::Pointer<_T, _D>() const noexcept { return this->pBegin; }
 
-        __host__ __device__ inline       _T& operator[](const size_t i)       noexcept { return *(this->m_pBegin + i); }
-        __host__ __device__ inline const _T& operator[](const size_t i) const noexcept { return *(this->m_pBegin + i); }
+        __host__ __device__ inline       _T& operator[](const size_t i)       noexcept { return *(this->pBegin + i); }
+        __host__ __device__ inline const _T& operator[](const size_t i) const noexcept { return *(this->pBegin + i); }
 
         __host__ __device__ inline ~Array() noexcept {
-            ::PRTX::Free(this->m_pBegin);
+            ::PRTX::Free(this->pBegin);
         }
     }; // Array<_T, _D>
 

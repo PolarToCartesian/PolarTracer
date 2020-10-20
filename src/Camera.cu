@@ -20,7 +20,7 @@ namespace PRTX {
         ::PRTX::Camera camera;
     };
 
-    __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const ::PRTX::GPU_ptr<::PRTX::RenderParams>& pRanderParams) noexcept {
+    __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const ::PRTX::GPU_Ptr<::PRTX::RenderParams>& pRanderParams) noexcept {
         const ::PRTX::RenderParams& renderParams = *pRanderParams;
 
         Ray ray;
