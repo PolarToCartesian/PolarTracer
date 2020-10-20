@@ -12,38 +12,42 @@
 
 namespace PRTX {
 
-    namespace details {
+    template <size_t _N>
+    __device__ Colorf32 RayTrace(const Ray& ray, const PRTX::GPU_ptr<::PRTX::RenderParams> pParams) {
+        bool bIntersected = false;
 
-        template <size_t _N>
-        __device__ Colorf32 RayTrace(const Ray& ray) {
-            const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
-            const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
+        if (bIntersected) {
+            return Colorf32(0.0f, 0.0f, 0.0f, 1.0f);
+        } else {
+            const float ratio = (threadIdx.y + blockIdx.y * blockDim.y) / float(pParams->height);
 
-            return Colorf32(pixelX / (float)1920, pixelY / (float)1080, 0.0f, 1.0f);
+            const auto skyLightBlue = ::PRTX::Vec4f32(0.78f, 0.96f, 1.00f, 1.0f);
+            const auto skyDarkBlue  = ::PRTX::Vec4f32(0.01f, 0.84f, 0.93f, 1.0f);
+
+            return ::PRTX::Vec4f32(skyLightBlue * ratio + skyDarkBlue * (1 - ratio));
         }
+    }
 
-        // Can't pass arguments via const& because these variables exist on the host and not on the device
-        __global__ void RayTracingDispatcher(const ::PRTX::Pointer<Coloru8, ::PRTX::Device::GPU> pSurface, const PRTX::GPU_ptr<::PRTX::RenderParams> pParams) {
-            // Calculate the thread's (X, Y) location
-            const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
-            const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
+    // Can't pass arguments via const& because these variables exist on the host and not on the device
+    __global__ void RayTracingDispatcher(const ::PRTX::Pointer<Coloru8, ::PRTX::Device::GPU> pSurface, const PRTX::GPU_ptr<::PRTX::RenderParams> pParams) {
+        // Calculate the thread's (X, Y) location
+        const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
+        const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
 
-            // Bounds check
-            if (pixelX >= pParams->width || pixelY >= pParams->height) return;
+        // Bounds check
+        if (pixelX >= pParams->width || pixelY >= pParams->height) return;
 
-            // Determine the pixel's index into the image buffer
-            const size_t index = pixelX + pixelY * pParams->width;
+        // Determine the pixel's index into the image buffer
+        const size_t index = pixelX + pixelY * pParams->width;
 
-            const Ray cameraRay = GenerateCameraRay(pixelX, pixelY, pParams);
+        const Ray cameraRay = GenerateCameraRay(pixelX, pixelY, pParams);
 
-            // the current pixel's color (represented with floating point components)
-            Colorf32 pixelColor = RayTrace<0>(cameraRay) * 255.f;
+        // the current pixel's color (represented with floating point components)
+        Colorf32 pixelColor = RayTrace<0>(cameraRay, pParams) * 255.f;
 
-            // Save the result to the buffer
-            *(pSurface + index) = Coloru8(pixelColor.x, pixelColor.y, pixelColor.z, pixelColor.w);
-        }
-
-    }; // details
+        // Save the result to the buffer
+        *(pSurface + index) = Coloru8(pixelColor.x, pixelColor.y, pixelColor.z, pixelColor.w);
+    }
 
     class PolarTracer {
     private:
@@ -79,7 +83,7 @@ namespace PRTX {
                                        std::ceil(this->host.m_renderParams.height / static_cast<float>(dimBlock.y)));
     
             // trace rays through each pixel
-            ::PRTX::details::RayTracingDispatcher<<<dimGrid, dimBlock>>>(this->device.m_frameBuffer.GetData(), this->device.m_pRenderParams);
+            ::PRTX::RayTracingDispatcher<<<dimGrid, dimBlock>>>(this->device.m_frameBuffer.GetData(), this->device.m_pRenderParams);
         
             // wait for the job to finish
             cudaDeviceSynchronize();
