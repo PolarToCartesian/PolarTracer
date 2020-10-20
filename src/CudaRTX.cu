@@ -41,19 +41,19 @@ namespace PRTX {
     }; // Pointer<_T>
 
     template <typename _T>
-    using CPU_PTR = ::PRTX::Pointer<_T, ::PRTX::Device::CPU>;
+    using CPU_ptr = ::PRTX::Pointer<_T, ::PRTX::Device::CPU>;
 
     template <typename _T>
-    using GPU_PTR = ::PRTX::Pointer<_T, ::PRTX::Device::GPU>;
+    using GPU_ptr = ::PRTX::Pointer<_T, ::PRTX::Device::GPU>;
 
     template <typename _T, ::PRTX::Device _D>
     __host__ __device__ inline ::PRTX::Pointer<_T, _D> AllocateSize(const size_t size) noexcept {
         if constexpr (_D == ::PRTX::Device::CPU) {
-            return ::PRTX::CPU_PTR<_T>(reinterpret_cast<_T*>(std::malloc(size)));
+            return ::PRTX::CPU_ptr<_T>(reinterpret_cast<_T*>(std::malloc(size)));
         } else {
             _T* p;
             cudaMalloc(&p, size);
-            return ::PRTX::GPU_PTR<_T>(p);
+            return ::PRTX::GPU_ptr<_T>(p);
         }
     }
 
@@ -92,16 +92,31 @@ namespace PRTX {
     template <typename _T, ::PRTX::Device _D>
     class Array {
     private:
-        size_t m_count;
+        size_t m_count = 0;
         ::PRTX::Pointer<_T, _D> m_pBegin;
 
     public:
+        __host__ __device__ inline Array() noexcept = default;
+
         __host__ __device__ inline Array(const size_t count) noexcept
             : m_count(count), m_pBegin(::PRTX::AllocateCount<_T, _D>(count)) {  }
         
         template <::PRTX::Device _D_O>
         __host__ __device__ inline Array(const Array<_T, _D_O>& o) noexcept : Array(o.m_count) {
             ::PRTX::CopyCount(this->m_pBegin, o.m_pBegin, this->m_count);
+        }
+
+        __host__ __device__ inline Array(Array<_T, _D>&& o) noexcept
+            : m_count(o.m_count), m_pBegin(o.m_pBegin)
+        {  }
+
+        __host__ __device__ inline Array<_T, _D>& operator=(Array<_T, _D>&& o) noexcept {
+            this->m_count   = o.m_count;
+            o.m_count       = 0;
+            this->m_pBegin  = o.m_pBegin;
+            o.m_pBegin      = (_T*)nullptr;
+
+            return *this;
         }
 
         __host__ __device__ inline void Reserve(const size_t count) noexcept {
@@ -201,32 +216,26 @@ namespace PRTX {
         const std::uint16_t m_height  = 0;
         const std::uint32_t m_nPixels = 0;
 
-        ::PRTX::CPU_PTR<Coloru8> m_pBuff;
+        ::PRTX::CPU_Array<Coloru8> m_pArray;
 
     public:
         Image() = default;
 
         Image(const std::uint16_t width, const std::uint16_t height) noexcept 
-        : m_width(width), m_height(height), m_nPixels(static_cast<std::uint32_t>(width) * height)
-        {
-            this->m_pBuff = ::PRTX::AllocateSize<Coloru8, ::PRTX::Device::CPU>(this->m_nPixels * sizeof(Coloru8));
-        }
-
-        ~Image() {
-            ::PRTX::Free(this->m_pBuff);
-        }
+            : m_width(width), m_height(height), m_nPixels(static_cast<std::uint32_t>(width) * height),
+              m_pArray(::PRTX::CPU_Array<Coloru8>(this->m_nPixels)) { }
 
         inline std::uint16_t GetWidth()      const noexcept { return this->m_width;   }
         inline std::uint16_t GetHeight()     const noexcept { return this->m_height;  }
         inline std::uint32_t GetPixelCount() const noexcept { return this->m_nPixels; }
 
-        inline ::PRTX::CPU_PTR<Coloru8> GetBufferPtr() const noexcept { return this->m_pBuff; }
+        inline ::PRTX::CPU_ptr<Coloru8> GetBufferPtr() const noexcept { return this->m_pArray; }
 
-        inline       Coloru8& operator()(const size_t i)       noexcept { return this->m_pBuff[i]; }
-        inline const Coloru8& operator()(const size_t i) const noexcept { return this->m_pBuff[i]; }
+        inline       Coloru8& operator()(const size_t i)       noexcept { return this->m_pArray[i]; }
+        inline const Coloru8& operator()(const size_t i) const noexcept { return this->m_pArray[i]; }
 
-        inline       Coloru8& operator()(const size_t x, const size_t y)       noexcept { return this->m_pBuff[y * this->m_width + this->m_height]; }
-        inline const Coloru8& operator()(const size_t x, const size_t y) const noexcept { return this->m_pBuff[y * this->m_width + this->m_height]; }
+        inline       Coloru8& operator()(const size_t x, const size_t y)       noexcept { return this->m_pArray[y * this->m_width + this->m_height]; }
+        inline const Coloru8& operator()(const size_t x, const size_t y) const noexcept { return this->m_pArray[y * this->m_width + this->m_height]; }
 
         void Save(const std::string& filename) noexcept {
             const std::string fullFilename = filename + ".pam";
@@ -239,7 +248,7 @@ namespace PRTX {
                 std::fprintf(fp, "P7\nWIDTH %d\nHEIGHT %d\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", this->m_width, this->m_height);
     
                 // Write Contents
-                std::fwrite(this->m_pBuff, this->m_nPixels * sizeof(Coloru8), 1u, fp);
+                std::fwrite(this->m_pArray.GetData(), this->m_nPixels * sizeof(Coloru8), 1u, fp);
     
                 // Close
                 std::fclose(fp);
@@ -276,7 +285,7 @@ namespace PRTX {
             return 0.5f;
         }
 
-        __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const ::PRTX::GPU_PTR<PolarTracerNonMeshData>& pDeviceNMD) noexcept {
+        __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const ::PRTX::GPU_ptr<PolarTracerNonMeshData>& pDeviceNMD) noexcept {
             Ray ray;
             ray.origin    = Vec4f32(0.f, 0.f, 0.f, 0.f);
             ray.direction = Vec4f32(
@@ -289,7 +298,7 @@ namespace PRTX {
         }
 
         // Can't pass arguments via const& because these variables exist on the host and not on the device
-        __global__ void RayTracingDispatcher(const PRTX::GPU_PTR<Coloru8> pSurface, const PRTX::GPU_PTR<PolarTracerNonMeshData> pDeviceNMD) {
+        __global__ void RayTracingDispatcher(const PRTX::GPU_ptr<Coloru8> pSurface, const PRTX::GPU_ptr<PolarTracerNonMeshData> pDeviceNMD) {
             // Calculate the thread's (X, Y) location
             const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
             const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
@@ -318,22 +327,22 @@ namespace PRTX {
         } host;
 
         struct {
-            PRTX::GPU_PTR<Coloru8> m_pRenderBuffer;
-            PRTX::GPU_PTR<::PRTX::details::PolarTracerNonMeshData> m_pNonMeshData;
+            PRTX::GPU_Array<Coloru8> m_pRenderBuffer;
+            PRTX::GPU_ptr<::PRTX::details::PolarTracerNonMeshData> m_pNonMeshData;
         } device;
     
     public:
-        PolarTracer(const size_t width, const size_t height, const Camera& camera, const std::vector<Sphere>& spheres) {
+        PolarTracer(const size_t width, const size_t height, const Camera& camera, const ::PRTX::CPU_Array<Sphere>& spheres) {
             this->host.m_nonMeshData.width  = width;
             this->host.m_nonMeshData.height = height;
             this->host.m_nonMeshData.camera = camera;
             this->host.m_nonMeshData.cameraProjectH = std::tan(camera.fov);
             this->host.m_nonMeshData.cameraProjectW = this->host.m_nonMeshData.cameraProjectH * width / height;
 
-            this->device.m_pRenderBuffer = PRTX::AllocateCount<Coloru8, PRTX::Device::GPU>(width * height);
+            this->device.m_pRenderBuffer = PRTX::GPU_Array<Coloru8>(width * height);
             this->device.m_pNonMeshData  = PRTX::AllocateCount<::PRTX::details::PolarTracerNonMeshData, PRTX::Device::GPU>(1);
 
-            const auto src = ::PRTX::CPU_PTR<::PRTX::details::PolarTracerNonMeshData>(&this->host.m_nonMeshData);
+            const auto src = ::PRTX::CPU_ptr<::PRTX::details::PolarTracerNonMeshData>(&this->host.m_nonMeshData);
             ::PRTX::CopySize(this->device.m_pNonMeshData, src, sizeof(::PRTX::details::PolarTracerNonMeshData));
         }
 
@@ -355,11 +364,10 @@ namespace PRTX {
             cudaDeviceSynchronize();
     
             // copy the gpu buffer to a new cpu buffer
-            ::PRTX::CopySize(outSurface.GetBufferPtr(), this->device.m_pRenderBuffer, bufferSize);
+            ::PRTX::CopySize(outSurface.GetBufferPtr(), this->device.m_pRenderBuffer.GetData(), bufferSize);
         }
 
         inline ~PolarTracer() {
-            ::PRTX::Free(this->device.m_pRenderBuffer);
             ::PRTX::Free(this->device.m_pNonMeshData);
         }
     }; // PolarTracer
@@ -374,7 +382,7 @@ int main(int argc, char** argv) {
     camera.position = PRTX::Vec4f32();
     camera.fov      = M_PI / 4.f;
 
-    std::vector<PRTX::Sphere> spheres(1);
+    PRTX::CPU_Array<PRTX::Sphere> spheres(1);
     spheres[0].position = PRTX::Vec4f32{0.0f, 0.0f, 2.f, 0.f};
     spheres[0].radius   = 0.25f;
     spheres[0].material.diffuse   = PRTX::Colorf32{1.f, 0.f, 1.f, 1.f};
