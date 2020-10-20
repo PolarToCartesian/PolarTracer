@@ -165,7 +165,7 @@ namespace PolarTracer {
             Ray ray;
             ray.origin    = Vec4f32(0.f, 0.f, 0.f, 0.f);
             ray.direction = Vec4f32(
-                (2.0f  *  ((pixelX + RandomFloat()) / float(pNMD_raw->width) - 1.0f) * pNMD_raw->cameraProjectW),
+                (2.0f  * ((pixelX + RandomFloat()) / float(pNMD_raw->width)  - 1.0f) * pNMD_raw->cameraProjectW),
                 (-2.0f * ((pixelY + RandomFloat()) / float(pNMD_raw->height) + 1.0f) * pNMD_raw->cameraProjectH),
                 1.0f,
                 0.f);
@@ -173,16 +173,19 @@ namespace PolarTracer {
             return ray;
         }
 
-        __global__ void RayTracingDispatcher(const thrust::device_ptr<std::uint8_t> pSurface, const size_t width, const size_t height, const thrust::device_ptr<PolarTracerNonMeshData>& pNMD) {
+        // Can't pass arguments via const& because these variables exist on the host and not on the device
+        __global__ void RayTracingDispatcher(const thrust::device_ptr<std::uint8_t> pSurface, const thrust::device_ptr<PolarTracerNonMeshData> pNMD) {
+            PolarTracerNonMeshData* pNMD_raw = thrust::raw_pointer_cast(pNMD);
+
             // Calculate the thread's (X, Y) location
             const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
             const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
 
             // Bounds check
-            if (pixelX >= width || pixelY >= height) return;
+            if (pixelX >= pNMD_raw->width || pixelY >= pNMD_raw->height) return;
 
             // Determine the pixel's index into the image buffer
-            const size_t index = pixelX + pixelY * width;
+            const size_t index = pixelX + pixelY * pNMD_raw->width;
 
             const Ray cameraRay = GenerateCameraRay(pixelX, pixelY, pNMD);
 
@@ -196,6 +199,8 @@ namespace PolarTracer {
     }; // details
 
     void RayTraceScene(const Image& outSurface, const thrust::device_ptr<details::PolarTracerNonMeshData>& pNMD) noexcept {
+        details::PolarTracerNonMeshData* pNMD_raw = thrust::raw_pointer_cast(pNMD);
+
         const size_t bufferSize = outSurface.GetPixelCount() * sizeof(Coloru8);
 
         thrust::device_ptr<std::uint8_t> gpuBuffer = thrust::device_malloc<std::uint8_t>(bufferSize);
@@ -207,7 +212,7 @@ namespace PolarTracer {
                                    std::ceil(outSurface.GetHeight() / static_cast<float>(dimBlock.y)));
 
         // trace rays through each pixel
-        PolarTracer::details::RayTracingDispatcher<<<dimGrid, dimBlock>>>(gpuBuffer, outSurface.GetWidth(), outSurface.GetHeight(), pNMD);
+        PolarTracer::details::RayTracingDispatcher<<<dimGrid, dimBlock>>>(gpuBuffer, pNMD);
     
         // wait for the job to finish
         cudaDeviceSynchronize();
