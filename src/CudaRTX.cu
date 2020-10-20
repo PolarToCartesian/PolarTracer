@@ -47,18 +47,23 @@ namespace PRTX {
     using GPU_PTR = ::PRTX::Pointer<_T, ::PRTX::Device::GPU>;
 
     template <typename _T, ::PRTX::Device _D>
-    __host__ __device__ ::PRTX::Pointer<_T, _D> Allocate(const size_t count) noexcept {
+    __host__ __device__ inline ::PRTX::Pointer<_T, _D> AllocateSize(const size_t size) noexcept {
         if constexpr (_D == ::PRTX::Device::CPU) {
-            return ::PRTX::CPU_PTR<_T>(reinterpret_cast<_T*>(std::malloc(count * sizeof(_T))));
+            return ::PRTX::CPU_PTR<_T>(reinterpret_cast<_T*>(std::malloc(size)));
         } else {
             _T* p;
-            cudaMalloc(&p, count * sizeof(_T));
+            cudaMalloc(&p, size);
             return ::PRTX::GPU_PTR<_T>(p);
         }
     }
 
     template <typename _T, ::PRTX::Device _D>
-    __host__ __device__ void Free(const ::PRTX::Pointer<_T, _D>& p) noexcept {
+    __host__ __device__ inline ::PRTX::Pointer<_T, _D> AllocateCount(const size_t count) noexcept {
+        return ::PRTX::AllocateSize<_T, _D>(count * sizeof(_T));
+    }
+
+    template <typename _T, ::PRTX::Device _D>
+    __host__ __device__ inline void Free(const ::PRTX::Pointer<_T, _D>& p) noexcept {
         if constexpr (_D == ::PRTX::Device::CPU) {
             std::free(p);
         } else {
@@ -66,9 +71,23 @@ namespace PRTX {
         }
     }
 
-}; // PRTX
+    template <typename _T, ::PRTX::Device _D_DST, ::PRTX::Device _D_SRC>
+    __host__ __device__ inline void CopySize(const ::PRTX::Pointer<_T, _D_DST>& dst, const ::PRTX::Pointer<_T, _D_SRC>& src, const size_t size) noexcept {
+        if constexpr (_D_SRC == ::PRTX::Device::CPU && _D_DST == ::PRTX::Device::CPU) {
+            cudaMemcpy(dst, src, size, cudaMemcpyKind::cudaMemcpyHostToHost);
+        } else if constexpr (_D_SRC == ::PRTX::Device::GPU && _D_DST == ::PRTX::Device::GPU) {
+            cudaMemcpy(dst, src, size, cudaMemcpyKind::cudaMemcpyDeviceToDevice);
+        } else if constexpr (_D_SRC == ::PRTX::Device::CPU && _D_DST == ::PRTX::Device::GPU) {
+            cudaMemcpy(dst, src, size, cudaMemcpyKind::cudaMemcpyHostToDevice);
+        } else if constexpr (_D_SRC == ::PRTX::Device::GPU && _D_DST == ::PRTX::Device::CPU) {
+            cudaMemcpy(dst, src, size, cudaMemcpyKind::cudaMemcpyDeviceToHost);
+        } else { static_assert(1 == 1, "Incompatible Destination and Source Arguments"); }
+    }
 
-namespace PolarTracer {
+    template <typename _T, ::PRTX::Device _D_DST, ::PRTX::Device _D_SRC>
+    __host__ __device__ inline void CopyCount(const ::PRTX::Pointer<_T, _D_DST>& dst, const ::PRTX::Pointer<_T, _D_SRC>& src, const size_t count) noexcept {
+        ::PRTX::CopySize(dst, src, count * sizeof(_T));
+    }
 
     template <typename _T>
     struct Vec4 {
@@ -139,7 +158,7 @@ namespace PolarTracer {
         const std::uint16_t m_height  = 0;
         const std::uint32_t m_nPixels = 0;
 
-        std::unique_ptr<Coloru8[]> m_pBuff;
+        ::PRTX::CPU_PTR<Coloru8> m_pBuff;
 
     public:
         Image() = default;
@@ -147,14 +166,18 @@ namespace PolarTracer {
         Image(const std::uint16_t width, const std::uint16_t height) noexcept 
         : m_width(width), m_height(height), m_nPixels(static_cast<std::uint32_t>(width) * height)
         {
-            this->m_pBuff = std::make_unique<Coloru8[]>(this->m_nPixels);
+            this->m_pBuff = ::PRTX::AllocateSize<Coloru8, ::PRTX::Device::CPU>(this->m_nPixels * sizeof(Coloru8));
+        }
+
+        ~Image() {
+            ::PRTX::Free(this->m_pBuff);
         }
 
         inline std::uint16_t GetWidth()      const noexcept { return this->m_width;   }
         inline std::uint16_t GetHeight()     const noexcept { return this->m_height;  }
         inline std::uint32_t GetPixelCount() const noexcept { return this->m_nPixels; }
 
-        inline Coloru8* GetBufferPtr() const noexcept { return this->m_pBuff.get(); }
+        inline ::PRTX::CPU_PTR<Coloru8> GetBufferPtr() const noexcept { return this->m_pBuff; }
 
         inline       Coloru8& operator()(const size_t i)       noexcept { return this->m_pBuff[i]; }
         inline const Coloru8& operator()(const size_t i) const noexcept { return this->m_pBuff[i]; }
@@ -173,7 +196,7 @@ namespace PolarTracer {
                 std::fprintf(fp, "P7\nWIDTH %d\nHEIGHT %d\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", this->m_width, this->m_height);
     
                 // Write Contents
-                std::fwrite(this->m_pBuff.get(), this->m_nPixels * sizeof(Coloru8), 1u, fp);
+                std::fwrite(this->m_pBuff, this->m_nPixels * sizeof(Coloru8), 1u, fp);
     
                 // Close
                 std::fclose(fp);
@@ -248,12 +271,12 @@ namespace PolarTracer {
     class PolarTracer {
     private:
         struct {
-            ::PolarTracer::details::PolarTracerNonMeshData m_nonMeshData;
+            ::PRTX::details::PolarTracerNonMeshData m_nonMeshData;
         } host;
 
         struct {
             PRTX::GPU_PTR<Coloru8> m_pRenderBuffer;
-            PRTX::GPU_PTR<::PolarTracer::details::PolarTracerNonMeshData> m_pNonMeshData;
+            PRTX::GPU_PTR<::PRTX::details::PolarTracerNonMeshData> m_pNonMeshData;
         } device;
     
     public:
@@ -264,9 +287,11 @@ namespace PolarTracer {
             this->host.m_nonMeshData.cameraProjectH = std::tan(camera.fov);
             this->host.m_nonMeshData.cameraProjectW = this->host.m_nonMeshData.cameraProjectH * width / height;
 
-            this->device.m_pRenderBuffer = PRTX::Allocate<Coloru8, PRTX::Device::GPU>(width * height);
-            this->device.m_pNonMeshData  = PRTX::Allocate<::PolarTracer::details::PolarTracerNonMeshData, PRTX::Device::GPU>(1);
-            cudaMemcpy(this->device.m_pNonMeshData, &this->host.m_nonMeshData, sizeof(::PolarTracer::details::PolarTracerNonMeshData), cudaMemcpyHostToDevice);
+            this->device.m_pRenderBuffer = PRTX::AllocateSize<Coloru8, PRTX::Device::GPU>(width * height);
+            this->device.m_pNonMeshData  = PRTX::AllocateSize<::PRTX::details::PolarTracerNonMeshData, PRTX::Device::GPU>(1);
+
+            const auto src = ::PRTX::CPU_PTR<::PRTX::details::PolarTracerNonMeshData>(&this->host.m_nonMeshData);
+            ::PRTX::CopySize(this->device.m_pNonMeshData, src, sizeof(::PRTX::details::PolarTracerNonMeshData));
         }
 
         inline void RayTraceScene(const Image& outSurface) {
@@ -281,38 +306,38 @@ namespace PolarTracer {
                                        std::ceil(this->host.m_nonMeshData.height / static_cast<float>(dimBlock.y)));
     
             // trace rays through each pixel
-            ::PolarTracer::details::RayTracingDispatcher<<<dimGrid, dimBlock>>>(this->device.m_pRenderBuffer, this->device.m_pNonMeshData);
+            ::PRTX::details::RayTracingDispatcher<<<dimGrid, dimBlock>>>(this->device.m_pRenderBuffer, this->device.m_pNonMeshData);
         
             // wait for the job to finish
             cudaDeviceSynchronize();
     
             // copy the gpu buffer to a new cpu buffer
-            cudaMemcpy(outSurface.GetBufferPtr(), this->device.m_pRenderBuffer, bufferSize, cudaMemcpyDeviceToHost);
+            ::PRTX::CopySize(outSurface.GetBufferPtr(), this->device.m_pRenderBuffer, bufferSize);
         }
 
         inline ~PolarTracer() {
-            ::PRTX::Free<Coloru8, ::PRTX::Device::GPU>(this->device.m_pRenderBuffer);
-            ::PRTX::Free<::PolarTracer::details::PolarTracerNonMeshData, ::PRTX::Device::GPU>(this->device.m_pNonMeshData);
+            ::PRTX::Free(this->device.m_pRenderBuffer);
+            ::PRTX::Free(this->device.m_pNonMeshData);
         }
     }; // PolarTracer
 
-}; // PolarTracer
+}; // PRTX
 
 int main(int argc, char** argv) {
     const size_t WIDTH = 1920, HEIGHT = 1080;
-    PolarTracer::Image image(WIDTH, HEIGHT);
+    PRTX::Image image(WIDTH, HEIGHT);
 
-    PolarTracer::Camera camera;
-    camera.position = PolarTracer::Vec4f32();
+    PRTX::Camera camera;
+    camera.position = PRTX::Vec4f32();
     camera.fov      = M_PI / 4.f;
 
-    std::vector<PolarTracer::Sphere> spheres(1);
-    spheres[0].position = PolarTracer::Vec4f32{0.0f, 0.0f, 2.f, 0.f};
+    std::vector<PRTX::Sphere> spheres(1);
+    spheres[0].position = PRTX::Vec4f32{0.0f, 0.0f, 2.f, 0.f};
     spheres[0].radius   = 0.25f;
-    spheres[0].material.diffuse   = PolarTracer::Colorf32{1.f, 0.f, 1.f, 1.f};
-    spheres[0].material.emittance = PolarTracer::Colorf32{0.f, 0.f, 0.f, 0.f};
+    spheres[0].material.diffuse   = PRTX::Colorf32{1.f, 0.f, 1.f, 1.f};
+    spheres[0].material.emittance = PRTX::Colorf32{0.f, 0.f, 0.f, 0.f};
     
-    PolarTracer::PolarTracer pt(WIDTH, HEIGHT, camera, spheres);
+    PRTX::PolarTracer pt(WIDTH, HEIGHT, camera, spheres);
     pt.RayTraceScene(image);
 
     image.Save("frame");
