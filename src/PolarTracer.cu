@@ -52,7 +52,7 @@ namespace PRTX {
         }
 
         // Can't pass arguments via const& because these variables exist on the host and not on the device
-        __global__ void RayTracingDispatcher(const PRTX::GPU_ptr<Coloru8> pSurface, const PRTX::GPU_ptr<PolarTracerNonMeshData> pDeviceNMD) {
+        __global__ void RayTracingDispatcher(const ::PRTX::Pointer<Coloru8, ::PRTX::Device::GPU> pSurface, const PRTX::GPU_ptr<PolarTracerNonMeshData> pDeviceNMD) {
             // Calculate the thread's (X, Y) location
             const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
             const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
@@ -81,8 +81,8 @@ namespace PRTX {
         } host;
 
         struct {
-            PRTX::GPU_Array<Coloru8> m_pRenderBuffer;
-            PRTX::GPU_ptr<::PRTX::details::PolarTracerNonMeshData> m_pNonMeshData;
+            ::PRTX::Image<Coloru8, ::PRTX::Device::GPU> m_frameBuffer;
+            ::PRTX::GPU_ptr<::PRTX::details::PolarTracerNonMeshData> m_pNonMeshData;
         } device;
     
     public:
@@ -93,14 +93,14 @@ namespace PRTX {
             this->host.m_nonMeshData.cameraProjectH = std::tan(camera.fov);
             this->host.m_nonMeshData.cameraProjectW = this->host.m_nonMeshData.cameraProjectH * width / height;
 
-            this->device.m_pRenderBuffer = PRTX::GPU_Array<Coloru8>(width * height);
-            this->device.m_pNonMeshData  = PRTX::AllocateCount<::PRTX::details::PolarTracerNonMeshData, PRTX::Device::GPU>(1);
+            this->device.m_frameBuffer  = ::PRTX::Image<Coloru8, ::PRTX::Device::GPU>(width, height);
+            this->device.m_pNonMeshData = ::PRTX::AllocateCount<::PRTX::details::PolarTracerNonMeshData, PRTX::Device::GPU>(1);
 
             const auto src = ::PRTX::CPU_ptr<::PRTX::details::PolarTracerNonMeshData>(&this->host.m_nonMeshData);
             ::PRTX::CopySize(this->device.m_pNonMeshData, src, sizeof(::PRTX::details::PolarTracerNonMeshData));
         }
 
-        inline void RayTraceScene(const Image& outSurface) {
+        inline void RayTraceScene(const ::PRTX::Image<::PRTX::Coloru8, ::PRTX::Device::CPU>& outSurface) {
             assert(outSurface.GetWidth() == this->host.m_nonMeshData.width && outSurface.GetHeight() == this->host.m_nonMeshData.height);
 
             const size_t bufferSize = outSurface.GetPixelCount() * sizeof(Coloru8);
@@ -112,13 +112,13 @@ namespace PRTX {
                                        std::ceil(this->host.m_nonMeshData.height / static_cast<float>(dimBlock.y)));
     
             // trace rays through each pixel
-            ::PRTX::details::RayTracingDispatcher<<<dimGrid, dimBlock>>>(this->device.m_pRenderBuffer, this->device.m_pNonMeshData);
+            ::PRTX::details::RayTracingDispatcher<<<dimGrid, dimBlock>>>(this->device.m_frameBuffer.GetData(), this->device.m_pNonMeshData);
         
             // wait for the job to finish
             cudaDeviceSynchronize();
     
             // copy the gpu buffer to a new cpu buffer
-            ::PRTX::CopySize(outSurface.GetBufferPtr(), this->device.m_pRenderBuffer.GetData(), bufferSize);
+            ::PRTX::CopySize(outSurface.GetData(), this->device.m_frameBuffer.GetData(), bufferSize);
         }
 
         inline ~PolarTracer() {
