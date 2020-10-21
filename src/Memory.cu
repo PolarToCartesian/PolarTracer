@@ -26,7 +26,7 @@ namespace PRTX {
           : m_raw(o.m_raw)
         {  }
 
-        __host__ __device__ inline _T* Get() const noexcept { return this->m_raw; }
+        __host__ __device__ inline _T* const Get() const noexcept { return this->m_raw; }
 
         template <typename _U = _T>
         __host__ __device__ inline void operator=(_U* const p) noexcept {
@@ -129,10 +129,10 @@ namespace PRTX {
             : m_pBegin(pBegin), m_count(count)
         {  }
 
-        __host__ __device__ inline ::PRTX::Pointer<_T, _D> GetPtr()   const noexcept { return this->m_pBegin; }
-        __host__ __device__ inline size_t                  GetCount() const noexcept { return this->m_count;  }
+        __host__ __device__ inline const ::PRTX::Pointer<_T, _D>& GetPtr()   const noexcept { return this->m_pBegin; }
+        __host__ __device__ inline const size_t&                  GetCount() const noexcept { return this->m_count;  }
 
-        __host__ __device__ inline operator ::PRTX::Pointer<_T, _D>() const noexcept { return this->m_pBegin; }
+        __host__ __device__ inline operator const ::PRTX::Pointer<_T, _D>&() const noexcept { return this->m_pBegin; }
 
         __host__ __device__ inline       _T& operator[](const size_t i)       noexcept { return *(this->m_pBegin + i); }
         __host__ __device__ inline const _T& operator[](const size_t i) const noexcept { return *(this->m_pBegin + i); }
