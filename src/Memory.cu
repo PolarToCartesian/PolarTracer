@@ -80,17 +80,21 @@ namespace PRTX {
                                              const _PTR_SRC<_T_SRC, _D_SRC>& src,
                                              const size_t size) noexcept
     {
-        static_assert(std::is_same_v<_T_DST, _T_SRC>);
+        static_assert(std::is_same_v<_T_DST, _T_SRC>, "Incompatible Source And Destination Raw Pointer Types");
         
+        cudaMemcpyKind memcpyKind;
+
         if constexpr (_D_SRC == ::PRTX::Device::CPU && _D_DST == ::PRTX::Device::CPU) {
-            cudaMemcpy(dst, src, size, cudaMemcpyKind::cudaMemcpyHostToHost);
+            memcpyKind = cudaMemcpyKind::cudaMemcpyHostToHost;
         } else if constexpr (_D_SRC == ::PRTX::Device::GPU && _D_DST == ::PRTX::Device::GPU) {
-            cudaMemcpy(dst, src, size, cudaMemcpyKind::cudaMemcpyDeviceToDevice);
+            memcpyKind = cudaMemcpyKind::cudaMemcpyDeviceToDevice;
         } else if constexpr (_D_SRC == ::PRTX::Device::CPU && _D_DST == ::PRTX::Device::GPU) {
-            cudaMemcpy(dst, src, size, cudaMemcpyKind::cudaMemcpyHostToDevice);
+            memcpyKind = cudaMemcpyKind::cudaMemcpyHostToDevice;
         } else if constexpr (_D_SRC == ::PRTX::Device::GPU && _D_DST == ::PRTX::Device::CPU) {
-            cudaMemcpy(dst, src, size, cudaMemcpyKind::cudaMemcpyDeviceToHost);
+            memcpyKind = cudaMemcpyKind::cudaMemcpyDeviceToHost;
         } else { static_assert(1 == 1, "Incompatible Destination and Source Arguments"); }
+   
+        cudaMemcpy(dst, src, size, memcpyKind);
     }
 
     template <template<typename, ::PRTX::Device> typename _PTR_DST, typename _T_DST, ::PRTX::Device _D_DST,
@@ -99,7 +103,7 @@ namespace PRTX {
                                               const _PTR_SRC<_T_SRC, _D_SRC>& src,
                                               const size_t count) noexcept
     {
-        static_assert(std::is_same_v<_T_DST, _T_SRC>);
+        static_assert(std::is_same_v<_T_DST, _T_SRC>, "Incompatible Source And Destination Raw Pointer Types");
 
         ::PRTX::CopySize(dst, src, count * sizeof(_T_DST));
     }
@@ -109,7 +113,7 @@ namespace PRTX {
     __host__ __device__ inline void CopySingle(const _PTR_DST<_T_DST, _D_DST>& dst,
                                                const _PTR_SRC<_T_SRC, _D_SRC>& src) noexcept
     {
-        static_assert(std::is_same_v<_T_DST, _T_SRC>);
+        static_assert(std::is_same_v<_T_DST, _T_SRC>, "Incompatible Source And Destination Raw Pointer Types");
         
         ::PRTX::CopySize(dst, src, sizeof(_T_DST));
     }
@@ -159,7 +163,6 @@ namespace PRTX {
 
         __host__ __device__ inline _T* const operator->() const noexcept { return this->m_ptr; }
 
-        
         __host__ __device__ UniquePointer(const ::PRTX::UniquePointer<_T, _D>& o) = delete;
         __host__ __device__ ::PRTX::UniquePointer<_T, _D>& operator=(const ::PRTX::UniquePointer<_T, _D>& o) = delete;
     }; // UniquePointer<_T>
@@ -170,73 +173,76 @@ namespace PRTX {
     template <typename _T>
     using GPU_UniquePtr = ::PRTX::UniquePointer<_T, ::PRTX::Device::GPU>;
 
+
     template <typename _T, ::PRTX::Device _D>
-    class ArraySpan {
+    class ArrayView {
     private:
         size_t m_count = 0;
         ::PRTX::Pointer<_T, _D> m_pBegin;
     
     protected:
-        // These functions are protected so that users of the Array class can't use these functions
-        // we want this because the Array class manages the memory it owns. The user should not be able
-        // to change to the array's start pointer without the class freeing the memory it was owning
-        __host__ __device__ inline void SetPtr  (const ::PRTX::Pointer<_T, _D>& pBegin) noexcept { this->m_pBegin = pBegin; }
-        __host__ __device__ inline void SetCount(const size_t count)                    noexcept { this->m_count  = count;  }
+        __host__ __device__ inline void SetPointer(const ::PRTX::Pointer<_T, _D>& pBegin) noexcept { this->m_pBegin = pBegin; }
+        __host__ __device__ inline void SetCount  (const size_t count)                    noexcept { this->m_count  = count;  }
+
+        __host__ __device__ inline operator _T*& () noexcept { return this->m_pBegin; }
 
     public:
-        __host__ __device__ inline ArraySpan() noexcept = default;
+        __host__ __device__ inline ArrayView() noexcept = default;
 
-        __host__ __device__ inline ArraySpan(const ::PRTX::Pointer<_T, _D>& pBegin, const size_t count) noexcept
+        __host__ __device__ inline ArrayView(const ::PRTX::Pointer<_T, _D>& pBegin, const size_t count) noexcept
             : m_pBegin(pBegin), m_count(count)
         {  }
 
-        __host__ __device__ inline const ::PRTX::Pointer<_T, _D>& GetPtr()   const noexcept { return this->m_pBegin; }
-        __host__ __device__ inline const size_t&                  GetCount() const noexcept { return this->m_count;  }
+        __host__ __device__ inline const ::PRTX::Pointer<_T, _D>& GetPointer() const noexcept { return this->m_pBegin; }
+        __host__ __device__ inline const size_t&                  GetCount()   const noexcept { return this->m_count;  }
 
         __host__ __device__ inline operator const ::PRTX::Pointer<_T, _D>&() const noexcept { return this->m_pBegin; }
+
+        __host__ __device__ inline operator _T* const&() const noexcept { return this->m_pBegin; }
 
         __host__ __device__ inline       _T& operator[](const size_t i)       noexcept { return *(this->m_pBegin + i); }
         __host__ __device__ inline const _T& operator[](const size_t i) const noexcept { return *(this->m_pBegin + i); }
 
-        ~ArraySpan() = default;
-    };
+        ~ArrayView() = default;
+    }; // ArrayView<_T, _D>
 
     template <typename _T>
-    using CPU_ArraySpan = ArraySpan<_T, ::PRTX::Device::CPU>;
+    using CPU_ArrayView = ArrayView<_T, ::PRTX::Device::CPU>;
 
     template <typename _T>
-    using GPU_ArraySpan = ArraySpan<_T, ::PRTX::Device::GPU>;
+    using GPU_ArrayView = ArrayView<_T, ::PRTX::Device::GPU>;
+
 
     template <typename _T, ::PRTX::Device _D>
-    class Array : public ArraySpan<_T, _D> {
+    class Array : public ArrayView<_T, _D> {
     public:
         __host__ __device__ inline Array() noexcept = default;
 
         __host__ __device__ inline Array(const size_t count) noexcept {
             this->SetCount(count);
-            this->SetPtr(::PRTX::AllocateCount<_T, _D>(count));
+            this->SetPointer(::PRTX::AllocateCount<_T, _D>(count));
         }
         
         template <::PRTX::Device _D_O>
         __host__ __device__ inline Array(const Array<_T, _D_O>& o) noexcept
           : Array(o.GetCount())
         {
-            ::PRTX::CopyCount(this->GetPtr(), o.GetPtr(), this->GetCount());
+            ::PRTX::CopyCount(*this, o, this->GetCount());
         }
 
         __host__ __device__ inline Array(Array<_T, _D>&& o) noexcept
         {
             this->SetCount(o.GetCount());
             o.SetCount(0);
-            this->SetPtr(o.GetPtr());
-            o.SetPtr((_T*)nullptr);
+            this->SetPointer(o.GetPointer());
+            o.SetPointer((_T*)nullptr);
         }
 
         __host__ __device__ inline Array<_T, _D>& operator=(Array<_T, _D>&& o) noexcept {
             this->SetCount(o.GetCount());
             o.SetCount(0);
-            this->SetPtr(o.GetPtr());
-            o.SetPtr((_T*)nullptr);
+            this->SetPointer(o.GetPointer());
+            o.SetPointer((_T*)nullptr);
 
             return *this;
         }
@@ -245,15 +251,15 @@ namespace PRTX {
             const auto newCount = this->GetCount() + count;
             const auto newBegin = ::PRTX::AllocateCount<_T, _D>(newCount);
 
-            ::PRTX::CopyCount(newBegin, this->GetPtr(), this->GetCount());
-            ::PRTX::Free(this->GetPtr());
+            ::PRTX::CopyCount(newBegin, this->GetPointer(), this->GetCount());
+            ::PRTX::Free(this->GetPointer());
 
-            this->SetPtr(newBegin);
+            this->SetPointer(newBegin);
             this->SetCount(newCount);
         }
 
         __host__ __device__ inline ~Array() noexcept {
-            ::PRTX::Free(this->GetPtr());
+            ::PRTX::Free(this->GetPointer());
         }
     }; // Array<_T, _D>
 

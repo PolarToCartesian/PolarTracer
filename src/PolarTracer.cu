@@ -12,13 +12,20 @@
 
 namespace PRTX {
 
+    __device__ std::optional<::PRTX::Intersection>
+    FindClosestIntersection(const ::PRTX::Ray& ray,
+                            const ::PRTX::GPU_ArrayView<::PRTX::Sphere>& pSpheres) noexcept {
+        return {};
+    }
+
     template <size_t _N>
     __device__ Colorf32 RayTrace(const Ray& ray,
                                  const ::PRTX::GPU_Ptr<::PRTX::RenderParams> pParams,
-                                 const ::PRTX::GPU_ArraySpan<::PRTX::Sphere> pSpheres) {
-        bool bIntersected = false;
-
-        if (bIntersected) {
+                                 const ::PRTX::GPU_ArrayView<::PRTX::Sphere> pSpheres) {
+        
+        auto intersection = FindClosestIntersection(ray, pSpheres);
+        
+        if (intersection.has_value()) {
             return Colorf32(0.0f, 0.0f, 0.0f, 1.0f);
         } else {
             const float ratio = (threadIdx.y + blockIdx.y * blockDim.y) / float(pParams->height);
@@ -33,7 +40,7 @@ namespace PRTX {
     // Can't pass arguments via const& because these variables exist on the host and not on the device
     __global__ void RayTracingDispatcher(const ::PRTX::GPU_Ptr<Coloru8> pSurface,
                                          const ::PRTX::GPU_Ptr<::PRTX::RenderParams> pParams,
-                                         const ::PRTX::GPU_ArraySpan<::PRTX::Sphere> pSpheres) {
+                                         const ::PRTX::GPU_ArrayView<::PRTX::Sphere> pSpheres) {
         // Calculate the thread's (X, Y) location
         const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
         const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
@@ -61,7 +68,7 @@ namespace PRTX {
 
         struct {
             ::PRTX::Image<Coloru8, ::PRTX::Device::GPU> m_frameBuffer;
-            ::PRTX::GPU_Ptr<::PRTX::RenderParams> m_pRenderParams;
+            ::PRTX::GPU_UniquePtr<::PRTX::RenderParams> m_pRenderParams;
             ::PRTX::GPU_Array<::PRTX::Sphere>     m_spheres;
         } device;
     
@@ -98,10 +105,6 @@ namespace PRTX {
     
             // copy the gpu buffer to a new cpu buffer
             ::PRTX::CopySize(outSurface.GetPtr(), this->device.m_frameBuffer.GetPtr(), bufferSize);
-        }
-
-        inline ~PolarTracer() {
-            ::PRTX::Free(this->device.m_pRenderParams);
         }
     }; // PolarTracer
 
