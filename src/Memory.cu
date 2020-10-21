@@ -5,8 +5,13 @@
 
 namespace PRTX {
 
+    // The "Device" enum class represents the devices from which
+    // memory can be accessed. This is necessary because the cpu can't
+    // read/write directly from/to the GPU's memory and conversely.
     enum class Device { CPU, GPU }; // Device
 
+    // The Pointer<typename _T, ::PRTX::Device _D> class represents a C++ Pointer of base type
+    // _T that is accessible from the device _D (view enum ::PRTX::Device).
     template <typename _T, ::PRTX::Device _D>
     class Pointer {
     private:
@@ -38,6 +43,7 @@ namespace PRTX {
         __host__ __device__ inline _T* const operator->() const noexcept { return this->m_raw; }
     }; // Pointer<_T>
 
+    // Some aliases for the ::PRTX::Pointer<_T, _D> class.
     template <typename _T>
     using CPU_Ptr = ::PRTX::Pointer<_T, ::PRTX::Device::CPU>;
 
@@ -119,6 +125,10 @@ namespace PRTX {
     }
 
 
+    // The UniquePointer<typename _T, ::PRTX::Device _D> class represents a C++ Pointer
+    // of base type _T whose memory is owned and managed by this class. As a result,
+    // when this class is destroyed or it's owning memory location changes, it will
+    // free the memory it owned.
     template <typename _T, ::PRTX::Device _D>
     class UniquePointer {
     private:
@@ -165,15 +175,19 @@ namespace PRTX {
 
         __host__ __device__ UniquePointer(const ::PRTX::UniquePointer<_T, _D>& o) = delete;
         __host__ __device__ ::PRTX::UniquePointer<_T, _D>& operator=(const ::PRTX::UniquePointer<_T, _D>& o) = delete;
-    }; // UniquePointer<_T>
+    }; // UniquePointer<_T, _D>
 
+    // Some aliases for the ::PRTX::UniquePointer<_T, _D> class.
     template <typename _T>
     using CPU_UniquePtr = ::PRTX::UniquePointer<_T, ::PRTX::Device::CPU>;
 
     template <typename _T>
     using GPU_UniquePtr = ::PRTX::UniquePointer<_T, ::PRTX::Device::GPU>;
 
-
+    // The ArrayView<typename _T, ::PRTX::Device _D> class represents a
+    // contiguous allocation of memory on the device _D of elements of type
+    // _T. It is defined by a starting memory address and a count of elements
+    // of type _T following the address.
     template <typename _T, ::PRTX::Device _D>
     class ArrayView {
     private:
@@ -206,6 +220,7 @@ namespace PRTX {
         ~ArrayView() = default;
     }; // ArrayView<_T, _D>
 
+    // Some aliases for the ::PRTX::ArrayView<_T, _D> class.
     template <typename _T>
     using CPU_ArrayView = ArrayView<_T, ::PRTX::Device::CPU>;
 
@@ -213,6 +228,8 @@ namespace PRTX {
     using GPU_ArrayView = ArrayView<_T, ::PRTX::Device::GPU>;
 
 
+    // The Array<typename _T, ::PRTX::Device _D> is essentialy a
+    // ArrayView<_T, _D> who owns the memory it represents.
     template <typename _T, ::PRTX::Device _D>
     class Array : public ArrayView<_T, _D> {
     public:
@@ -263,6 +280,7 @@ namespace PRTX {
         }
     }; // Array<_T, _D>
 
+    // Some aliases for the ::PRTX::Array<_T, _D> class.
     template <typename _T>
     using CPU_Array = Array<_T, ::PRTX::Device::CPU>;
 
