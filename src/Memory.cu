@@ -15,31 +15,27 @@ namespace PRTX {
     public:
         __host__ __device__ inline Pointer() noexcept {  }
 
+        __host__ __device__ inline Pointer(_T* const p)              noexcept { this->SetPointer(p); }
+        __host__ __device__ inline Pointer(const Pointer<_T, _D>& o) noexcept { this->SetPointer(o); }
+
+        __host__ __device__ inline void SetPointer(_T* const p)              noexcept { this->m_raw = p; }
+        __host__ __device__ inline void SetPointer(const Pointer<_T, _D>& o) noexcept { this->SetPointer(o.m_raw); }
+
+        __host__ __device__ inline _T*&       GetPointer()       noexcept { return this->m_raw; }
+        __host__ __device__ inline _T* const& GetPointer() const noexcept { return this->m_raw; }
+
         template <typename _U>
-        __host__ __device__ inline Pointer(_U* const p) noexcept
-          : m_raw(p)
-        {
-          static_assert(std::is_same<_T, _U>::value);
+        __host__ __device__ inline Pointer<_U, _D> AsPointerTo() const noexcept {
+            return ::PRTX::Pointer<_U, _D>(reinterpret_cast<_U*>(this->m_raw));
         }
 
-        __host__ __device__ inline Pointer(const Pointer<_T, _D>& o) noexcept
-          : m_raw(o.m_raw)
-        {  }
-
-        __host__ __device__ inline _T* const Get() const noexcept { return this->m_raw; }
-
-        template <typename _U = _T>
-        __host__ __device__ inline void operator=(_U* const p) noexcept {
-          this->m_raw = p; 
-          static_assert(std::is_same<_T, _U>::value);
-        }
-        
-        __host__ __device__ inline void operator=(const ::PRTX::Pointer<_T, _D>& o) noexcept { this->m_raw = o.m_raw; }
+        __host__ __device__ inline void operator=(_T* const p)                      noexcept { this->SetPointer(p); }
+        __host__ __device__ inline void operator=(const ::PRTX::Pointer<_T, _D>& o) noexcept { this->SetPointer(o); }
 
         __host__ __device__ inline operator _T*&      ()       noexcept { return this->m_raw; }
         __host__ __device__ inline operator _T* const&() const noexcept { return this->m_raw; }
 
-        __host__ __device__ inline _T* operator->() const noexcept { return this->m_raw; }
+        __host__ __device__ inline _T* const operator->() const noexcept { return this->m_raw; }
     }; // Pointer<_T>
 
     template <typename _T>
@@ -54,7 +50,7 @@ namespace PRTX {
             return ::PRTX::CPU_Ptr<_T>(reinterpret_cast<_T*>(std::malloc(size)));
         } else {
             _T* p;
-            cudaMalloc(&p, size);
+            cudaMalloc(reinterpret_cast<void**>(&p), size);
             return ::PRTX::GPU_Ptr<_T>(p);
         }
     }
@@ -74,15 +70,18 @@ namespace PRTX {
         if constexpr (_D == ::PRTX::Device::CPU) {
             std::free(p);
         } else {
-            cudaFree(reinterpret_cast<void*>(p.Get()));
+            cudaFree(p.template AsPointerTo<void>());
         }
     }
 
-    template <typename _T, ::PRTX::Device _D_DST, ::PRTX::Device _D_SRC>
-    __host__ __device__ inline void CopySize(const ::PRTX::Pointer<_T, _D_DST>& dst,
-                                             const ::PRTX::Pointer<_T, _D_SRC>& src,
+    template <template<typename, ::PRTX::Device> typename _PTR_DST, typename _T_DST, ::PRTX::Device _D_DST,
+              template<typename, ::PRTX::Device> typename _PTR_SRC, typename _T_SRC, ::PRTX::Device _D_SRC>
+    __host__ __device__ inline void CopySize(const _PTR_DST<_T_DST, _D_DST>& dst,
+                                             const _PTR_SRC<_T_SRC, _D_SRC>& src,
                                              const size_t size) noexcept
     {
+        static_assert(std::is_same_v<_T_DST, _T_SRC>);
+        
         if constexpr (_D_SRC == ::PRTX::Device::CPU && _D_DST == ::PRTX::Device::CPU) {
             cudaMemcpy(dst, src, size, cudaMemcpyKind::cudaMemcpyHostToHost);
         } else if constexpr (_D_SRC == ::PRTX::Device::GPU && _D_DST == ::PRTX::Device::GPU) {
@@ -94,20 +93,82 @@ namespace PRTX {
         } else { static_assert(1 == 1, "Incompatible Destination and Source Arguments"); }
     }
 
-    template <typename _T, ::PRTX::Device _D_DST, ::PRTX::Device _D_SRC>
-    __host__ __device__ inline void CopyCount(const ::PRTX::Pointer<_T, _D_DST>& dst,
-                                              const ::PRTX::Pointer<_T, _D_SRC>& src,
+    template <template<typename, ::PRTX::Device> typename _PTR_DST, typename _T_DST, ::PRTX::Device _D_DST,
+              template<typename, ::PRTX::Device> typename _PTR_SRC, typename _T_SRC, ::PRTX::Device _D_SRC>
+    __host__ __device__ inline void CopyCount(const _PTR_DST<_T_DST, _D_DST>& dst,
+                                              const _PTR_SRC<_T_SRC, _D_SRC>& src,
                                               const size_t count) noexcept
     {
-        ::PRTX::CopySize(dst, src, count * sizeof(_T));
+        static_assert(std::is_same_v<_T_DST, _T_SRC>);
+
+        ::PRTX::CopySize(dst, src, count * sizeof(_T_DST));
     }
 
-    template <typename _T, ::PRTX::Device _D_DST, ::PRTX::Device _D_SRC>
-    __host__ __device__ inline void CopySingle(const ::PRTX::Pointer<_T, _D_DST>& dst,
-                                               const ::PRTX::Pointer<_T, _D_SRC>& src) noexcept
+    template <template<typename, ::PRTX::Device> typename _PTR_DST, typename _T_DST, ::PRTX::Device _D_DST,
+              template<typename, ::PRTX::Device> typename _PTR_SRC, typename _T_SRC, ::PRTX::Device _D_SRC>
+    __host__ __device__ inline void CopySingle(const _PTR_DST<_T_DST, _D_DST>& dst,
+                                               const _PTR_SRC<_T_SRC, _D_SRC>& src) noexcept
     {
-        ::PRTX::CopySize(dst, src, sizeof(_T));
+        static_assert(std::is_same_v<_T_DST, _T_SRC>);
+        
+        ::PRTX::CopySize(dst, src, sizeof(_T_DST));
     }
+
+
+    template <typename _T, ::PRTX::Device _D>
+    class UniquePointer {
+    private:
+        ::PRTX::Pointer<_T, _D> m_ptr;
+    
+    public:
+        __host__ __device__ inline UniquePointer() noexcept = default;
+        
+        __host__ __device__ inline UniquePointer(const ::PRTX::Pointer<_T, _D>& o)  noexcept {
+            this->Free();
+            this->m_ptr = o;
+        }
+
+        __host__ __device__ inline UniquePointer(::PRTX::UniquePointer<_T, _D>&& o) noexcept {
+            this->Free();
+            this->m_ptr = o.m_ptr;
+            o.m_ptr     = nullptr;
+        }
+
+        __host__ __device__ inline void Free() const noexcept { ::PRTX::Free(this->m_ptr); }
+
+        __host__ __device__ inline ~UniquePointer() noexcept { this->Free(); }
+
+        __host__ __device__ inline ::PRTX::UniquePointer<_T, _D>& operator=(const ::PRTX::Pointer<_T, _D>& o)  noexcept {
+            this->Free();
+            this->m_ptr = o;
+            return *this;
+        }
+
+        __host__ __device__ inline ::PRTX::UniquePointer<_T, _D>& operator=(::PRTX::UniquePointer<_T, _D>&& o) noexcept {
+            this->Free();
+            this->m_ptr = o;
+            o.m_ptr     = nullptr;
+            return *this;
+        }
+
+        __host__ __device__ inline const ::PRTX::Pointer<_T, _D>& GetPointer() const noexcept { return this->m_ptr; }
+
+        __host__ __device__ inline operator const ::PRTX::Pointer<_T, _D>&() const noexcept { return this->m_ptr; }
+
+        __host__ __device__ inline operator _T* const&() const noexcept { return this->m_ptr; }
+
+        __host__ __device__ inline _T* const operator->() const noexcept { return this->m_ptr; }
+
+        
+        __host__ __device__ UniquePointer(const ::PRTX::UniquePointer<_T, _D>& o) = delete;
+        __host__ __device__ ::PRTX::UniquePointer<_T, _D>& operator=(const ::PRTX::UniquePointer<_T, _D>& o) = delete;
+    }; // UniquePointer<_T>
+
+    template <typename _T>
+    using CPU_UniquePtr = ::PRTX::UniquePointer<_T, ::PRTX::Device::CPU>;
+
+    template <typename _T>
+    using GPU_UniquePtr = ::PRTX::UniquePointer<_T, ::PRTX::Device::GPU>;
 
     template <typename _T, ::PRTX::Device _D>
     class ArraySpan {
