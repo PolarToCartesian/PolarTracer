@@ -1,12 +1,12 @@
 # PolarTracer (Cuda)
 
-A ray tracer build with cuda and c++.
+A path tracer build with cuda and c++. For more information about path tracers, you can visit a previous project of mine [CPU-Path-Tracer](https://github.com/PolarToCartesian/CPU-Path-Tracer)
 
 ## Building Instructions
 
 This project is built with clang and not nvcc in order to use C++17 features. This makes the building process non-trivial since clang doesn't support cuda versions newer than 9.0. On 64 bit linux systems, you have to:
 
-+ Install CUDA 9.0 (not a newer version)
++ Install CUDA 9.0 (exact version)
 + Install Clang++ (any version supporting C++17 should do)
 
 On debian based systems, you can install the following useful tools: ```sudo apt install git imagemagick make clang```
