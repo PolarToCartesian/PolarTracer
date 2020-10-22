@@ -583,21 +583,22 @@ __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixe
     Ray ray;
     ray.origin    = Vec4f32(0.f, 0.f, 0.f, 0.f);
     ray.direction = Vec4f32::Normalized3D(Vec4f32(
-        (2.0f *  ((pixelX + RandomFloat()) / static_cast<float>(renderParams.width))  - 1.0f) * tan(renderParams.camera.fov) * static_cast<float>(renderParams.width) / static_cast<float>(renderParams.height),
-        (-2.0f * ((pixelY + RandomFloat()) / static_cast<float>(renderParams.height)) + 1.0f) * tan(renderParams.camera.fov),
-        1.0f, 0.f));
+        2.0f  * ((pixelX + RandomFloat()) / float(renderParams.width)  - 1.0f) * tan(renderParams.camera.fov) * renderParams.width / renderParams.height,
+        -2.0f * ((pixelY + RandomFloat()) / float(renderParams.height) + 1.0f) * tan(renderParams.camera.fov),
+        1.0f,
+        0.f));
     
     return ray;
 }
 
-__device__ Intersection
+__device__ std::optional<Intersection>
 RayIntersects(const Ray& ray, const Sphere& sphere) noexcept {
     const Vec4f32 L   = sphere.center - ray.origin;
     const float   tca = Vec4f32::DotProduct3D(L, ray.direction);
     const float   d2  = Vec4f32::DotProduct3D(L, L) - tca * tca;
   
     if (d2 > sphere.radius)
-      return Intersection{{}, FLT_MAX};
+      return {};
     
     const float thc = sqrt(sphere.radius - d2);
     float t0 = tca - thc;
@@ -613,7 +614,7 @@ RayIntersects(const Ray& ray, const Sphere& sphere) noexcept {
       t0 = t1;
   
       if (t0 < 0)
-        return Intersection{{}, FLT_MAX};
+        return {};
     }
   
     Intersection intersection;
@@ -626,17 +627,25 @@ RayIntersects(const Ray& ray, const Sphere& sphere) noexcept {
     return intersection;
 }
 
-__device__ Intersection
+__device__ std::optional<Intersection>
 FindClosestIntersection(const Ray& ray,
                         const GPU_ArrayView<Sphere>& pSpheres) noexcept {
-    Intersection closest;
-    closest.t = FLT_MAX;
+    std::optional<Intersection> closest;
 
     for (size_t i = 0; i < pSpheres.GetCount(); i++) {
-        const Intersection current = RayIntersects(ray, pSpheres[i]);
+        const std::optional<Intersection> current = RayIntersects(ray, pSpheres[i]);
 
-        if (current.t < closest.t)
-            closest = current;
+        if (closest.has_value()) {
+            if (current.has_value()) {
+                if (current->t < closest->t) {
+                    closest = current;
+                }
+            }
+        } else {
+            if (current.has_value()) {
+                closest = current;
+            }
+        }
     }
 
     return closest;
@@ -648,8 +657,8 @@ __device__ Colorf32 RayTrace(const Ray& ray,
                                 const GPU_ArrayView<Sphere> pSpheres) {
     
     auto intersection = FindClosestIntersection(ray, pSpheres);
-
-    if (intersection.t != FLT_MAX) {
+    
+    if (intersection.has_value()) {
         return Colorf32(0.0f, 0.0f, 0.0f, 1.0f);
     } else {
         const float ratio = (threadIdx.y + blockIdx.y * blockDim.y) / float(pParams->height);
@@ -742,7 +751,7 @@ int main(int argc, char** argv) {
 
     renderParams.width  = WIDTH;
     renderParams.height = HEIGHT;
-    renderParams.camera.position = Vec4f32(0.f, 0.f, -2.f, 0.f);
+    renderParams.camera.position = Vec4f32();
     renderParams.camera.fov      = M_PI / 4.f;
 
     CPU_Array<Sphere> spheres(1);
