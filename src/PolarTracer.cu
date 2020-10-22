@@ -3,8 +3,9 @@
 #include <cassert>
 #include <optional>
 
-#define EPSILON (float)0.01f
+#define EPSILON (float)0.1f
 #define FLT_MAX (float)std::numeric_limits<float>::max()
+#define MAX_REC (10)
 
 __device__ size_t randomNumberIndex = 0u;
 __device__ float  randomNumbers[100] = { 0.199597f, 0.604987f, 0.255558f, 0.421514f, 0.720092f, 0.815522f, 0.192279f, 0.385067f, 0.350586f, 0.397595f, 0.357564f, 0.748578f, 0.00414681f, 0.533777f, 0.995393f, 0.907929f, 0.494525f, 0.472084f, 0.864498f, 0.695326f, 0.938409f, 0.785484f, 0.290453f, 0.13312f, 0.943201f, 0.926033f, 0.320409f, 0.0662487f, 0.25414f, 0.421945f, 0.667499f, 0.444524f, 0.838885f, 0.908202f, 0.8063f, 0.291879f, 0.114376f, 0.875398f, 0.247916f, 0.045868f, 0.535327f, 0.491882f, 0.642606f, 0.184197f, 0.154249f, 0.14628f, 0.939923f, 0.979867f, 0.503506f, 0.478285f, 0.491597f, 0.0545161f, 0.847528f, 0.0108021f, 0.934526f, 0.282655f, 0.0207591f, 0.329495f, 0.328761f, 0.560112f, 0.119835f, 0.296947f, 0.289384f, 0.83466f, 0.164883f, 0.0987901f, 0.0792031f, 0.258547f, 0.0754077f, 0.0143626f, 0.318207f, 0.483693f, 0.0715536f, 0.998425f, 0.322974f, 0.879418f, 0.261024f, 0.49866f, 0.453179f, 0.347203f, 0.638452f, 0.274543f, 0.595394f, 0.640481f, 0.798533f, 0.680735f, 0.95186f, 0.4518f, 0.969803f, 0.419822f, 0.00485671f, 0.727772f, 0.475605f, 0.816288f, 0.55194f, 0.550753f, 0.601672f, 0.908048f, 0.35448f, 0.863961f };
@@ -489,6 +490,13 @@ typedef Vec4<float>        Colorf32;
 typedef Vec4<float>        Vec4f32;
 
 
+__device__ inline Vec4f32 Random3DUnitVector() noexcept {
+    return Vec4f32::Normalized3D(Vec4f32(2.0f * RandomFloat() - 1.0f,
+                                         2.0f * RandomFloat() - 1.0f,
+                                         2.0f * RandomFloat() - 1.0f,
+                                         0.f));
+}
+
 template <typename T, Device D>
 class Image {
 private:
@@ -644,21 +652,38 @@ FindClosestIntersection(const Ray& ray,
 
 template <size_t _N>
 __device__ Colorf32 RayTrace(const Ray& ray,
-                                const GPU_Ptr<RenderParams> pParams,
-                                const GPU_ArrayView<Sphere> pSpheres) {
-    
+                             const GPU_Ptr<RenderParams>& pParams,
+                             const GPU_ArrayView<Sphere>& pSpheres) {
     auto intersection = FindClosestIntersection(ray, pSpheres);
 
-    if (intersection.t != FLT_MAX) {
-        return Colorf32(0.0f, 0.0f, 0.0f, 1.0f);
-    } else {
-        const float ratio = (threadIdx.y + blockIdx.y * blockDim.y) / float(pParams->height);
-
-        const auto skyLightBlue = Vec4f32(0.78f, 0.96f, 1.00f, 1.0f);
-        const auto skyDarkBlue  = Vec4f32(0.01f, 0.84f, 0.93f, 1.0f);
-
-        return Vec4f32(skyLightBlue * ratio + skyDarkBlue * (1 - ratio));
+    if constexpr (_N < MAX_REC) {
+        if (intersection.t != FLT_MAX) {
+            const Material& material = intersection.material;
+    
+            Ray newRay;
+            newRay.origin    = intersection.location + EPSILON * intersection.normal;
+            newRay.direction = Random3DUnitVector();
+    
+            return material.diffuse;
+           //const Colorf32 incomingColor = RayTrace<_N + 1u>(newRay, pParams, pSpheres);
+    
+           //Colorf32 finalColor = material.emittance + material.diffuse * (incomingColor * 1.0f / (1.f / (2 * 3.141592f)));
+           //finalColor.x = Clamp(finalColor.x, 0.f, 1.f);
+           //finalColor.y = Clamp(finalColor.y, 0.f, 1.f);
+           //finalColor.z = Clamp(finalColor.z, 0.f, 1.f);
+           //finalColor.w = Clamp(finalColor.w, 0.f, 1.f);
+    
+           //return finalColor;
+        }
     }
+
+    // Sky Color
+    const float ratio = (threadIdx.y + blockIdx.y * blockDim.y) / float(pParams->height);
+
+    const auto skyLightBlue = Vec4f32(0.78f, 0.96f, 1.00f, 1.0f);
+    const auto skyDarkBlue  = Vec4f32(0.01f, 0.84f, 0.93f, 1.0f);
+    
+    return Vec4f32(skyLightBlue * ratio + skyDarkBlue * (1 - ratio));
 }
 
 // Can't pass arguments via const& because these variables exist on the host and not on the device
@@ -745,12 +770,17 @@ int main(int argc, char** argv) {
     renderParams.camera.position = Vec4f32(0.f, 0.f, -2.f, 0.f);
     renderParams.camera.fov      = M_PI / 4.f;
 
-    CPU_Array<Sphere> spheres(1);
+    CPU_Array<Sphere> spheres(2);
     spheres[0].center = Vec4f32{0.0f, 0.0f, 2.f, 0.f};
     spheres[0].radius = 0.25f;
     spheres[0].material.diffuse   = Colorf32{1.f, 0.f, 1.f, 1.f};
-    spheres[0].material.emittance = Colorf32{0.f, 0.f, 0.f, 0.f};
+    spheres[0].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
     
+    spheres[1].center = Vec4f32{1.0f, 0.0f, 1.75f, 0.0f};
+    spheres[1].radius = 0.25f;
+    spheres[1].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
+    spheres[1].material.emittance = Colorf32{1.f, 1.f, 1.f, 1.f};
+
     PolarTracer pt(renderParams, spheres);
     pt.RayTraceScene(image);
 
