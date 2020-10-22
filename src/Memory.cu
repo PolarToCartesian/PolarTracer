@@ -5,6 +5,13 @@
 
 namespace PRTX {
 
+    namespace details {
+
+        template <typename _T>
+        using remove_void = std::conditional_t<std::is_same_v<_T, void>, int, _T>;
+
+    }; // namespace details
+
     // The "Device" enum class represents the devices from which
     // memory can be accessed. This is necessary because the cpu can't
     // read/write directly from/to the GPU's memory and conversely.
@@ -40,6 +47,16 @@ namespace PRTX {
         __host__ __device__ inline operator _T*&      ()       noexcept { return this->m_raw; }
         __host__ __device__ inline operator _T* const&() const noexcept { return this->m_raw; }
 
+        __host__ __device__ inline       ::PRTX::details::remove_void<_T>& operator[](const size_t i)       noexcept {
+            static_assert(!std::is_same_v<_T, void>, "Can't Index A Pointer To A Void");
+            return *(this->m_ptr + i);
+        }
+        
+        __host__ __device__ inline const ::PRTX::details::remove_void<_T>& operator[](const size_t i) const noexcept {
+            static_assert(!std::is_same_v<_T, void>, "Can't Index A Pointer To A Void");
+            return *(this->m_ptr + i);
+        }
+
         __host__ __device__ inline _T* const operator->() const noexcept { return this->m_raw; }
     }; // Pointer<_T>
 
@@ -49,6 +66,8 @@ namespace PRTX {
 
     template <typename _T>
     using GPU_Ptr = ::PRTX::Pointer<_T, ::PRTX::Device::GPU>;
+
+    // Memory Allocation
 
     template <typename _T, ::PRTX::Device _D>
     __host__ __device__ inline ::PRTX::Pointer<_T, _D> AllocateSize(const size_t size) noexcept {
@@ -71,6 +90,8 @@ namespace PRTX {
         return ::PRTX::AllocateSize<_T, _D>(sizeof(_T));
     }
 
+    // Memory Deallocation
+
     template <typename _T, ::PRTX::Device _D>
     __host__ __device__ inline void Free(const ::PRTX::Pointer<_T, _D>& p) noexcept {
         if constexpr (_D == ::PRTX::Device::CPU) {
@@ -79,6 +100,12 @@ namespace PRTX {
             cudaFree(p.template AsPointerTo<void>());
         }
     }
+
+    // Copying Memory
+    // These functions take as arguments objects of type _PTR<_T, _D>
+    // such as Pointer<_T, _D>, ArrayView<_T, _D> or Array<_T, _D>.
+    // The object _PTR<_T, _D> has to be convertible to a raw pointer of
+    // base type _T accessible by the device _D.
 
     template <template<typename, ::PRTX::Device> typename _PTR_DST, typename _T_DST, ::PRTX::Device _D_DST,
               template<typename, ::PRTX::Device> typename _PTR_SRC, typename _T_SRC, ::PRTX::Device _D_SRC>
@@ -135,8 +162,17 @@ namespace PRTX {
         ::PRTX::Pointer<_T, _D> m_ptr;
     
     public:
-        __host__ __device__ inline UniquePointer() noexcept = default;
+        __host__ __device__ inline UniquePointer() noexcept {
+            this->Free();
+            this->m_ptr = nullptr;
+        }
         
+        template <typename... _ARGS>
+        __host__ __device__ inline UniquePointer(const _ARGS&... args) noexcept {
+            this->Free();
+            this->m_ptr = new (::PRTX::AllocateSingle<_T, _D>()) _T(std::forward<_ARGS>(args)...);
+        }
+
         __host__ __device__ inline UniquePointer(const ::PRTX::Pointer<_T, _D>& o)  noexcept {
             this->Free();
             this->m_ptr = o;
@@ -148,7 +184,13 @@ namespace PRTX {
             o.m_ptr     = nullptr;
         }
 
-        __host__ __device__ inline void Free() const noexcept { ::PRTX::Free(this->m_ptr); }
+        __host__ __device__ inline void Free() const noexcept {
+            // Since we use placement new, we have to call _T's destructor ourselves
+            this->m_ptr->~_T();
+
+            // and then free the memory
+            ::PRTX::Free(this->m_ptr);
+        }
 
         __host__ __device__ inline ~UniquePointer() noexcept { this->Free(); }
 
@@ -172,6 +214,10 @@ namespace PRTX {
         __host__ __device__ inline operator _T* const&() const noexcept { return this->m_ptr; }
 
         __host__ __device__ inline _T* const operator->() const noexcept { return this->m_ptr; }
+
+        __host__ __device__ inline       _T& operator[](const size_t i)       noexcept { return *(this->m_ptr + i); }
+        __host__ __device__ inline const _T& operator[](const size_t i) const noexcept { return *(this->m_ptr + i); }
+
 
         __host__ __device__ UniquePointer(const ::PRTX::UniquePointer<_T, _D>& o) = delete;
         __host__ __device__ ::PRTX::UniquePointer<_T, _D>& operator=(const ::PRTX::UniquePointer<_T, _D>& o) = delete;
