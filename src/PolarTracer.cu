@@ -3,15 +3,16 @@
 #include <cassert>
 #include <optional>
 
+#include <curand.h>
+#include <curand_kernel.h>
+
 #define EPSILON (float)0.1f
 #define FLT_MAX (float)std::numeric_limits<float>::max()
 #define MAX_REC (10)
+#define SPP     (1000)
 
-__device__ size_t randomNumberIndex = 0u;
-__device__ float  randomNumbers[100] = { 0.199597f, 0.604987f, 0.255558f, 0.421514f, 0.720092f, 0.815522f, 0.192279f, 0.385067f, 0.350586f, 0.397595f, 0.357564f, 0.748578f, 0.00414681f, 0.533777f, 0.995393f, 0.907929f, 0.494525f, 0.472084f, 0.864498f, 0.695326f, 0.938409f, 0.785484f, 0.290453f, 0.13312f, 0.943201f, 0.926033f, 0.320409f, 0.0662487f, 0.25414f, 0.421945f, 0.667499f, 0.444524f, 0.838885f, 0.908202f, 0.8063f, 0.291879f, 0.114376f, 0.875398f, 0.247916f, 0.045868f, 0.535327f, 0.491882f, 0.642606f, 0.184197f, 0.154249f, 0.14628f, 0.939923f, 0.979867f, 0.503506f, 0.478285f, 0.491597f, 0.0545161f, 0.847528f, 0.0108021f, 0.934526f, 0.282655f, 0.0207591f, 0.329495f, 0.328761f, 0.560112f, 0.119835f, 0.296947f, 0.289384f, 0.83466f, 0.164883f, 0.0987901f, 0.0792031f, 0.258547f, 0.0754077f, 0.0143626f, 0.318207f, 0.483693f, 0.0715536f, 0.998425f, 0.322974f, 0.879418f, 0.261024f, 0.49866f, 0.453179f, 0.347203f, 0.638452f, 0.274543f, 0.595394f, 0.640481f, 0.798533f, 0.680735f, 0.95186f, 0.4518f, 0.969803f, 0.419822f, 0.00485671f, 0.727772f, 0.475605f, 0.816288f, 0.55194f, 0.550753f, 0.601672f, 0.908048f, 0.35448f, 0.863961f };
-
-__device__ float RandomFloat() noexcept {
-    return randomNumbers[(randomNumberIndex++) % (sizeof(randomNumbers) / sizeof(float))];
+__device__ float RandomFloat(curandState_t* const randState) noexcept {
+    return curand(randState) /(float) RAND_MAX;
 }
 
 template <typename T>
@@ -490,10 +491,10 @@ typedef Vec4<float>        Colorf32;
 typedef Vec4<float>        Vec4f32;
 
 
-__device__ inline Vec4f32 Random3DUnitVector() noexcept {
-    return Vec4f32::Normalized3D(Vec4f32(2.0f * RandomFloat() - 1.0f,
-                                         2.0f * RandomFloat() - 1.0f,
-                                         2.0f * RandomFloat() - 1.0f,
+__device__ inline Vec4f32 Random3DUnitVector(curandState_t* const randState) noexcept {
+    return Vec4f32::Normalized3D(Vec4f32(2.0f * RandomFloat(randState) - 1.0f,
+                                         2.0f * RandomFloat(randState) - 1.0f,
+                                         2.0f * RandomFloat(randState) - 1.0f,
                                          0.f));
 }
 
@@ -585,14 +586,14 @@ struct Intersection {
     Material material;  // the material that the intersected object is made of      ::      
 }; // Intersection
 
-__device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const GPU_Ptr<RenderParams>& pRanderParams) noexcept {
+__device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const GPU_Ptr<RenderParams>& pRanderParams, curandState_t* const randState) noexcept {
     const RenderParams& renderParams = *pRanderParams;
 
     Ray ray;
     ray.origin    = Vec4f32(0.f, 0.f, 0.f, 0.f);
     ray.direction = Vec4f32::Normalized3D(Vec4f32(
-        (2.0f *  ((pixelX + RandomFloat()) / static_cast<float>(renderParams.width))  - 1.0f) * tan(renderParams.camera.fov) * static_cast<float>(renderParams.width) / static_cast<float>(renderParams.height),
-        (-2.0f * ((pixelY + RandomFloat()) / static_cast<float>(renderParams.height)) + 1.0f) * tan(renderParams.camera.fov),
+        (2.0f *  ((pixelX + RandomFloat(randState)) / static_cast<float>(renderParams.width))  - 1.0f) * tan(renderParams.camera.fov) * static_cast<float>(renderParams.width) / static_cast<float>(renderParams.height),
+        (-2.0f * ((pixelY + RandomFloat(randState)) / static_cast<float>(renderParams.height)) + 1.0f) * tan(renderParams.camera.fov),
         1.0f, 0.f));
     
     return ray;
@@ -653,7 +654,8 @@ FindClosestIntersection(const Ray& ray,
 template <size_t _N>
 __device__ Colorf32 RayTrace(const Ray& ray,
                              const GPU_Ptr<RenderParams>& pParams,
-                             const GPU_ArrayView<Sphere>& pSpheres) {
+                             const GPU_ArrayView<Sphere>& pSpheres,
+                             curandState_t* const randState) {
     auto intersection = FindClosestIntersection(ray, pSpheres);
 
     if constexpr (_N < MAX_REC) {
@@ -662,18 +664,20 @@ __device__ Colorf32 RayTrace(const Ray& ray,
     
             Ray newRay;
             newRay.origin    = intersection.location + EPSILON * intersection.normal;
-            newRay.direction = Random3DUnitVector();
+            newRay.direction = Random3DUnitVector(randState);
     
-            return material.diffuse;
-           //const Colorf32 incomingColor = RayTrace<_N + 1u>(newRay, pParams, pSpheres);
+            //return material.diffuse;
+           const Colorf32 incomingColor = RayTrace<_N + 1u>(newRay, pParams, pSpheres, randState);
     
-           //Colorf32 finalColor = material.emittance + material.diffuse * (incomingColor * 1.0f / (1.f / (2 * 3.141592f)));
-           //finalColor.x = Clamp(finalColor.x, 0.f, 1.f);
-           //finalColor.y = Clamp(finalColor.y, 0.f, 1.f);
-           //finalColor.z = Clamp(finalColor.z, 0.f, 1.f);
-           //finalColor.w = Clamp(finalColor.w, 0.f, 1.f);
+            const float dotProduct = Clamp(Vec4f32::DotProduct3D(newRay.direction, intersection.normal), 0.f, 1.f);
+
+           Colorf32 finalColor = material.emittance + material.diffuse * (incomingColor * dotProduct / (1.f / (2 * 3.141592f)));
+           finalColor.x = Clamp(finalColor.x, 0.f, 1.f);
+           finalColor.y = Clamp(finalColor.y, 0.f, 1.f);
+           finalColor.z = Clamp(finalColor.z, 0.f, 1.f);
+           finalColor.w = Clamp(finalColor.w, 0.f, 1.f);
     
-           //return finalColor;
+           return finalColor;
         }
     }
 
@@ -690,9 +694,14 @@ __device__ Colorf32 RayTrace(const Ray& ray,
 __global__ void RayTracingDispatcher(const GPU_Ptr<Coloru8> pSurface,
                                         const GPU_Ptr<RenderParams> pParams,
                                         const GPU_ArrayView<Sphere> pSpheres) {
+
+    curandState_t randState;
+
     // Calculate the thread's (X, Y) location
     const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
     const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
+
+    curand_init(pixelX, pixelY, 0, &randState);
 
     // Bounds check
     if (pixelX >= pParams->width || pixelY >= pParams->height) return;
@@ -700,10 +709,14 @@ __global__ void RayTracingDispatcher(const GPU_Ptr<Coloru8> pSurface,
     // Determine the pixel's index into the image buffer
     const size_t index = pixelX + pixelY * pParams->width;
 
-    const Ray cameraRay = GenerateCameraRay(pixelX, pixelY, pParams);
+    const Ray cameraRay = GenerateCameraRay(pixelX, pixelY, pParams, &randState);
 
     // the current pixel's color (represented with floating point components)
-    Colorf32 pixelColor = RayTrace<0>(cameraRay, pParams, pSpheres) * 255.f;
+    Colorf32 pixelColor{};
+    for (size_t i = 0; i < SPP; i++)
+        pixelColor += RayTrace<0>(cameraRay, pParams, pSpheres, &randState);
+    pixelColor /= (float)SPP;
+    pixelColor *= 255.f;
 
     // Save the result to the buffer
     *(pSurface + index) = Coloru8(pixelColor.x, pixelColor.y, pixelColor.z, pixelColor.w);
@@ -740,7 +753,7 @@ public:
 
         // Allocate 1 thread per pixel of coordinates (X,Y). Use as many blocks in the grid as needed
         // The RayTrace function will use the thread's index (both in the grid and in a block) to determine the pixel it will trace rays through
-        const dim3 dimBlock = dim3(32, 32); // 32 warps of 32 threads per block (=1024 threads in total which is the hardware limit)
+        const dim3 dimBlock = dim3(16, 16); // 32 warps of 32 threads per block (=1024 threads in total which is the hardware limit)
         const dim3 dimGrid  = dim3(std::ceil(this->host.m_renderParams.width  / static_cast<float>(dimBlock.x)),
                                    std::ceil(this->host.m_renderParams.height / static_cast<float>(dimBlock.y)));
 
@@ -750,7 +763,7 @@ public:
                                                     this->device.m_spheres);
     
         // wait for the job to finish
-        cudaDeviceSynchronize();
+        printf("%s\n", cudaGetErrorString(cudaDeviceSynchronize()));
 
         // copy the gpu buffer to a new cpu buffer
         CopySize(outSurface.GetPtr(), this->device.m_frameBuffer.GetPtr(), bufferSize);
@@ -772,11 +785,11 @@ int main(int argc, char** argv) {
 
     CPU_Array<Sphere> spheres(2);
     spheres[0].center = Vec4f32{0.0f, 0.0f, 2.f, 0.f};
-    spheres[0].radius = 0.25f;
+    spheres[0].radius = 0.5f;
     spheres[0].material.diffuse   = Colorf32{1.f, 0.f, 1.f, 1.f};
     spheres[0].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
     
-    spheres[1].center = Vec4f32{1.0f, 0.0f, 1.75f, 0.0f};
+    spheres[1].center = Vec4f32{0.75f, 0.0f, 0.f, 0.0f};
     spheres[1].radius = 0.25f;
     spheres[1].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
     spheres[1].material.emittance = Colorf32{1.f, 1.f, 1.f, 1.f};
