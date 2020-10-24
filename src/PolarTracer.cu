@@ -6,9 +6,9 @@
 #include <curand.h>
 #include <curand_kernel.h>
 
-#define EPSILON (float)0.1f
+#define EPSILON (float)0.01f
 #define FLT_MAX (float)std::numeric_limits<float>::max()
-#define MAX_REC (10)
+#define MAX_REC (4)
 #define SPP     (1000)
 
 __device__ float RandomFloat(curandState_t* const randState) noexcept {
@@ -578,6 +578,13 @@ struct Sphere {
     Material material;
 }; // Sphere
 
+struct Plane {
+    Vec4f32 position; // Any Point On The Plane
+    Vec4f32 normal;   // Normal To The Surface
+
+    Material material;
+}; // Plane
+
 struct Intersection {
     Ray      inRay;     // incoming ray
     float            t; // distance from the ray's origin to intersection point
@@ -636,13 +643,43 @@ RayIntersects(const Ray& ray, const Sphere& sphere) noexcept {
 }
 
 __device__ Intersection
+RayIntersects(const Ray& ray, const Plane& plane) noexcept {
+    const float denom = Vec4f32::DotProduct3D(plane.normal, ray.direction);
+    if (abs(denom) >= EPSILON) {
+        const Vec4f32 v = plane.position - ray.origin;
+        const float t = Vec4f32::DotProduct3D(v, plane.normal) / denom;
+
+        if (t >= 0) {
+            Intersection intersection;
+            intersection.inRay    = ray;
+            intersection.t        = t;
+            intersection.location = ray.origin + t * ray.direction;
+            intersection.normal   = plane.normal;
+            intersection.material = plane.material;
+
+            return intersection;
+        }
+    }
+
+  return Intersection{{}, FLT_MAX};
+}
+
+__device__ Intersection
 FindClosestIntersection(const Ray& ray,
-                        const GPU_ArrayView<Sphere>& pSpheres) noexcept {
+                        const GPU_ArrayView<Sphere>& pSpheres,
+                        const GPU_ArrayView<Plane>&  pPlanes) noexcept {
     Intersection closest;
     closest.t = FLT_MAX;
 
     for (size_t i = 0; i < pSpheres.GetCount(); i++) {
         const Intersection current = RayIntersects(ray, pSpheres[i]);
+
+        if (current.t < closest.t)
+            closest = current;
+    }
+
+    for (size_t i = 0; i < pPlanes.GetCount(); i++) {
+        const Intersection current = RayIntersects(ray, pPlanes[i]);
 
         if (current.t < closest.t)
             closest = current;
@@ -655,8 +692,9 @@ template <size_t _N>
 __device__ Colorf32 RayTrace(const Ray& ray,
                              const GPU_Ptr<RenderParams>& pParams,
                              const GPU_ArrayView<Sphere>& pSpheres,
+                             const GPU_ArrayView<Plane>&  pPlanes,
                              curandState_t* const randState) {
-    auto intersection = FindClosestIntersection(ray, pSpheres);
+    auto intersection = FindClosestIntersection(ray, pSpheres, pPlanes);
 
     if constexpr (_N < MAX_REC) {
         if (intersection.t != FLT_MAX) {
@@ -667,33 +705,35 @@ __device__ Colorf32 RayTrace(const Ray& ray,
             newRay.direction = Random3DUnitVector(randState);
     
             //return material.diffuse;
-           const Colorf32 incomingColor = RayTrace<_N + 1u>(newRay, pParams, pSpheres, randState);
+            const Colorf32 incomingColor = RayTrace<_N + 1u>(newRay, pParams, pSpheres, pPlanes, randState);
     
             const float dotProduct = Clamp(Vec4f32::DotProduct3D(newRay.direction, intersection.normal), 0.f, 1.f);
 
-           Colorf32 finalColor = material.emittance + material.diffuse * (incomingColor * dotProduct / (1.f / (2 * 3.141592f)));
-           finalColor.x = Clamp(finalColor.x, 0.f, 1.f);
-           finalColor.y = Clamp(finalColor.y, 0.f, 1.f);
-           finalColor.z = Clamp(finalColor.z, 0.f, 1.f);
-           finalColor.w = Clamp(finalColor.w, 0.f, 1.f);
+            Colorf32 finalColor = material.emittance + material.diffuse * incomingColor * 3.141592f;
+            finalColor.x = Clamp(finalColor.x, 0.f, 1.f);
+            finalColor.y = Clamp(finalColor.y, 0.f, 1.f);
+            finalColor.z = Clamp(finalColor.z, 0.f, 1.f);
+            finalColor.w = Clamp(finalColor.w, 0.f, 1.f);
     
-           return finalColor;
+            return finalColor;
         }
     }
 
     // Sky Color
-    const float ratio = (threadIdx.y + blockIdx.y * blockDim.y) / float(pParams->height);
-
-    const auto skyLightBlue = Vec4f32(0.78f, 0.96f, 1.00f, 1.0f);
-    const auto skyDarkBlue  = Vec4f32(0.01f, 0.84f, 0.93f, 1.0f);
-    
-    return Vec4f32(skyLightBlue * ratio + skyDarkBlue * (1 - ratio));
+    //const float ratio = (threadIdx.y + blockIdx.y * blockDim.y) / float(pParams->height);
+//
+    //const auto skyLightBlue = Vec4f32(0.78f, 0.96f, 1.00f, 1.0f);
+    //const auto skyDarkBlue  = Vec4f32(0.01f, 0.84f, 0.93f, 1.0f);
+    //
+    //return Vec4f32(skyLightBlue * ratio + skyDarkBlue * (1 - ratio));
+    return Vec4f32{0.f, 0.f, 0.f, 1.0f};
 }
 
 // Can't pass arguments via const& because these variables exist on the host and not on the device
 __global__ void RayTracingDispatcher(const GPU_Ptr<Coloru8> pSurface,
-                                        const GPU_Ptr<RenderParams> pParams,
-                                        const GPU_ArrayView<Sphere> pSpheres) {
+                                     const GPU_Ptr<RenderParams> pParams,
+                                     const GPU_ArrayView<Sphere> pSpheres,
+                                     const GPU_ArrayView<Plane>  pPlanes) {
 
     curandState_t randState;
 
@@ -714,7 +754,7 @@ __global__ void RayTracingDispatcher(const GPU_Ptr<Coloru8> pSurface,
     // the current pixel's color (represented with floating point components)
     Colorf32 pixelColor{};
     for (size_t i = 0; i < SPP; i++)
-        pixelColor += RayTrace<0>(cameraRay, pParams, pSpheres, &randState);
+        pixelColor += RayTrace<0>(cameraRay, pParams, pSpheres, pPlanes, &randState);
     pixelColor /= (float)SPP;
     pixelColor *= 255.f;
 
@@ -732,15 +772,17 @@ private:
         Image<Coloru8, Device::GPU> m_frameBuffer;
         GPU_UniquePtr<RenderParams> m_pRenderParams;
         GPU_Array<Sphere>     m_spheres;
+        GPU_Array<Plane>      m_planes;
     } device;
 
 public:
-    PolarTracer(const RenderParams& renderParams, const CPU_Array<Sphere>& spheres)
+    PolarTracer(const RenderParams& renderParams, const CPU_Array<Sphere>& spheres, const CPU_Array<Plane>& planes)
         : host{renderParams}
     {
         this->device.m_frameBuffer   = Image<Coloru8, Device::GPU>(renderParams.width, renderParams.height);
         this->device.m_pRenderParams = AllocateSingle<RenderParams, Device::GPU>();
         this->device.m_spheres       = GPU_Array<Sphere>(spheres);
+        this->device.m_planes        = GPU_Array<Plane>(planes);
 
         const auto src = CPU_Ptr<RenderParams>(&this->host.m_renderParams);
         CopySingle(this->device.m_pRenderParams, src);
@@ -760,7 +802,8 @@ public:
         // trace rays through each pixel
         RayTracingDispatcher<<<dimGrid, dimBlock>>>(this->device.m_frameBuffer.GetPtr(),
                                                     this->device.m_pRenderParams,
-                                                    this->device.m_spheres);
+                                                    this->device.m_spheres,
+                                                    this->device.m_planes);
     
         // wait for the job to finish
         printf("%s\n", cudaGetErrorString(cudaDeviceSynchronize()));
@@ -783,18 +826,59 @@ int main(int argc, char** argv) {
     renderParams.camera.position = Vec4f32(0.f, 0.f, -2.f, 0.f);
     renderParams.camera.fov      = M_PI / 4.f;
 
-    CPU_Array<Sphere> spheres(2);
+    CPU_Array<Sphere> spheres(4);
     spheres[0].center = Vec4f32{0.0f, 0.0f, 2.f, 0.f};
-    spheres[0].radius = 0.5f;
+    spheres[0].radius = 0.25f;
     spheres[0].material.diffuse   = Colorf32{1.f, 0.f, 1.f, 1.f};
     spheres[0].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
     
-    spheres[1].center = Vec4f32{0.75f, 0.0f, 0.f, 0.0f};
-    spheres[1].radius = 0.25f;
+    spheres[1].center = Vec4f32{0.f, -.8f, 1.f, 0.0f};
+    spheres[1].radius = 0.05f;
     spheres[1].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
     spheres[1].material.emittance = Colorf32{1.f, 1.f, 1.f, 1.f};
 
-    PolarTracer pt(renderParams, spheres);
+    spheres[2].center = Vec4f32{-1.0f, 0.0f, 1.5f, 0.f};
+    spheres[2].radius = 0.25f;
+    spheres[2].material.diffuse   = Colorf32{0.f, 1.f, 1.f, 1.f};
+    spheres[2].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
+
+    spheres[3].center = Vec4f32{1.0f, 0.0f, 1.5f, 0.f};
+    spheres[3].radius = 0.25f;
+    spheres[3].material.diffuse   = Colorf32{1.f, 1.f, 0.f, 1.f};
+    spheres[3].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
+
+    //spheres[4].center = Vec4f32{0.4f, 0.0f, 0.8f, 0.f};
+    //spheres[4].radius = 0.15f;
+    //spheres[4].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
+    //spheres[4].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
+
+    CPU_Array<Plane> planes(5);
+    planes[0].position = Vec4f32{0.f, 0.f, 2.f, 0.f};
+    planes[0].normal   = Vec4f32{0.f, 0.f, -1.f, 0.f};
+    planes[0].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
+    planes[0].material.emittance = Colorf32{1.f, 1.f, 1.f, 1.f};
+
+    planes[1].position = Vec4f32{1.25f, 0.f, 0.f, 0.f};
+    planes[1].normal   = Vec4f32{-1.f, 0.f, 0.f, 0.f};
+    planes[1].material.diffuse   = Colorf32{1.f, 0.f, 0.f, 1.f};
+    planes[1].material.emittance = Colorf32{0.f, 0.f, 0.f, 0.f};
+
+    planes[2].position = Vec4f32{-1.25f, 0.f, 0.f, 0.f};
+    planes[2].normal   = Vec4f32{1.f, 0.f, 0.f, 0.f};
+    planes[2].material.diffuse   = Colorf32{0.f, 1.f, 0.f, 1.f};
+    planes[2].material.emittance = Colorf32{0.f, 0.f, 0.f, 0.f};
+
+    planes[3].position = Vec4f32{0.f, -1.0f, 0.f, 0.f};
+    planes[3].normal   = Vec4f32{0.f, 1.f, 0.f, 0.f};
+    planes[3].material.diffuse   = Colorf32{0.f, 0.f, 1.f, 1.f};
+    planes[3].material.emittance = Colorf32{0.f, 0.f, 0.f, 0.f};
+
+    planes[4].position = Vec4f32{0.f, 1.f, 0.f, 0.f};
+    planes[4].normal   = Vec4f32{0.f, -1.f, 0.f, 0.f};
+    planes[4].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
+    planes[4].material.emittance = Colorf32{0.f, 0.f, 0.f, 0.f};
+
+    PolarTracer pt(renderParams, spheres, planes);
     pt.RayTraceScene(image);
 
     SaveImage(image, "frame");
