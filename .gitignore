@@ -1,4 +1,8 @@
 PolarTracer
-frame.png
+*.png
 build/*
 .vscode/
+*.exe
+*.exp
+*.lib
+*.pam

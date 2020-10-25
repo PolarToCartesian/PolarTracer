@@ -4,14 +4,16 @@ A path tracer build with cuda and c++. For more information about path tracers, 
 
 ## Building Instructions
 
-This project is built with clang and not nvcc in order to use C++17 features. This makes the building process non-trivial since clang doesn't support cuda versions newer than 9.0. On 64 bit linux systems, you have to:
++ Download & Install the [Cuda Toolkit](https://developer.nvidia.com/cuda-downloads).
++ Install your C++ compiler of choice (compatible with nvcc, NVIDIA's CUDA compiler).
++ Install imagemagick (On Windows & Linux): this is used to convert *.pam images into *.png files
 
-+ Install CUDA 9.0 (exact version)
-+ Install Clang++ (any version supporting C++17 should do)
++ On windows, run ```run.bat``` to build & run the test scene.
++ On linux, run ```run.sh``` to build & run the test scene.
 
-On debian based systems, you can install the following useful tools: ```sudo apt install git imagemagick make clang```
++ The frame will be saved as ```frame.png```.
 
-Then, you can just run ```sh run.sh``` once you have cloned the repository with git.
++ Enjoy :-)
 
 ## References
 
