@@ -1,8 +1,10 @@
-#include <stdio.h>
+#include <chrono>
 #include <limits>
 #include <ostream>
 #include <cassert>
+#include <stdio.h>
 #include <optional>
+#include <iostream>
 
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -11,9 +13,9 @@
 #include <curand.h>
 #include <curand_kernel.h>
 
-#define EPSILON (float)0.0001f
+#define EPSILON (float)0.00001f
 #define MAX_REC (5)
-#define SPP     (10)
+#define SPP     (1000)
 
 __device__ float RandomFloat(curandState_t* const randState) noexcept {
     return curand_uniform(randState);
@@ -737,7 +739,7 @@ __device__ Colorf32 RayTrace(const Ray& ray,
             }
             
             const Colorf32 materialComp = RayTrace<_N + 1u>(newRay, pParams, pSpheres, pPlanes, randState);
-            const Colorf32 finalColor = material.emittance + material.diffuse * materialComp * 2 * 3.1415926f;
+            const Colorf32 finalColor = material.emittance + material.diffuse * materialComp;
 
             return Vec4f32::Clamped(finalColor, 0.f, 1.f);
         } else {
@@ -842,8 +844,6 @@ public:
 #define WIDTH  (1920)
 #define HEIGHT (1080)
 
-#include <iostream>
-
 int main(int argc, char** argv) {
     Image<Coloru8, Device::CPU> image(WIDTH, HEIGHT);
 
@@ -917,7 +917,12 @@ int main(int argc, char** argv) {
    planes[4].material.reflectance = 0.f;
 
     PolarTracer pt(renderParams, spheres, planes);
+
+    const auto startTime = std::chrono::high_resolution_clock::now();
     pt.RayTraceScene(image);
+    const auto endTime   = std::chrono::high_resolution_clock::now();
+
+    std::cout << "Took " << (std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() / 1000.f) << "s\n";
 
     SaveImage(image, "frame");
 }
