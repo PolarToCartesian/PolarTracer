@@ -1,18 +1,22 @@
+#include <stdio.h>
 #include <limits>
 #include <ostream>
 #include <cassert>
 #include <optional>
 
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+
 #include <curand.h>
 #include <curand_kernel.h>
 
-#define EPSILON (float)0.01f
-#define FLT_MAX (float)std::numeric_limits<float>::max()
-#define MAX_REC (4)
-#define SPP     (1000)
+#define EPSILON (float)0.0001f
+#define MAX_REC (5)
+#define SPP     (10)
 
 __device__ float RandomFloat(curandState_t* const randState) noexcept {
-    return curand(randState) /(float) RAND_MAX;
+    return curand_uniform(randState);
 }
 
 template <typename T>
@@ -31,7 +35,7 @@ template <typename T, Device D>
 class Pointer {
 private:
     T* m_raw = nullptr;
-    
+
 public:
     __host__ __device__ inline Pointer() noexcept {  }
 
@@ -41,7 +45,7 @@ public:
     __host__ __device__ inline void SetPointer(T* const p)              noexcept { this->m_raw = p; }
     __host__ __device__ inline void SetPointer(const Pointer<T, D>& o) noexcept { this->SetPointer(o.m_raw); }
 
-    __host__ __device__ inline T*&       GetPointer()       noexcept { return this->m_raw; }
+    __host__ __device__ inline T*& GetPointer()       noexcept { return this->m_raw; }
     __host__ __device__ inline T* const& GetPointer() const noexcept { return this->m_raw; }
 
     template <typename U>
@@ -52,20 +56,20 @@ public:
     __host__ __device__ inline void operator=(T* const p)                      noexcept { this->SetPointer(p); }
     __host__ __device__ inline void operator=(const Pointer<T, D>& o) noexcept { this->SetPointer(o); }
 
-    __host__ __device__ inline operator T*&      ()       noexcept { return this->m_raw; }
-    __host__ __device__ inline operator T* const&() const noexcept { return this->m_raw; }
+    __host__ __device__ inline operator T*& ()       noexcept { return this->m_raw; }
+    __host__ __device__ inline operator T* const& () const noexcept { return this->m_raw; }
 
     __host__ __device__ inline std::conditional_t<std::is_same_v<T, void>, int, T>& operator[](const size_t i) noexcept {
         static_assert(!std::is_same_v<T, void>, "Can't Index A Pointer To A Void");
         return *(this->m_ptr + i);
     }
-    
+
     __host__ __device__ inline const std::conditional_t<std::is_same_v<T, void>, int, T>& operator[](const size_t i) const noexcept {
         static_assert(!std::is_same_v<T, void>, "Can't Index A Pointer To A Void");
         return *(this->m_ptr + i);
     }
 
-    __host__ __device__ inline T* const operator->() const noexcept { return this->m_raw; }
+    __host__ __device__ inline T* operator->() const noexcept { return this->m_raw; }
 }; // Pointer<T>
 
 // Some aliases for the Pointer<T, D> class.
@@ -80,7 +84,8 @@ template <typename T, Device D>
 __host__ __device__ inline Pointer<T, D> AllocateSize(const size_t size) noexcept {
     if constexpr (D == Device::CPU) {
         return CPU_Ptr<T>(reinterpret_cast<T*>(std::malloc(size)));
-    } else {
+    }
+    else {
         T* p;
         cudaMalloc(reinterpret_cast<void**>(&p), size);
         return GPU_Ptr<T>(p);
@@ -103,7 +108,8 @@ template <typename T, Device D>
 __host__ __device__ inline void Free(const Pointer<T, D>& p) noexcept {
     if constexpr (D == Device::CPU) {
         std::free(p);
-    } else {
+    }
+    else {
         cudaFree(p.template AsPointerTo<void>());
     }
 }
@@ -115,33 +121,39 @@ __host__ __device__ inline void Free(const Pointer<T, D>& p) noexcept {
 // base type T accessible by the device D.
 
 template <template<typename, Device> typename _PTR_DST, typename T_DST, Device D_DST,
-          template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
-__host__ __device__ inline void CopySize(const _PTR_DST<T_DST, D_DST>& dst,
-                                            const _PTR_SRC<T_SRC, D_SRC>& src,
-                                            const size_t size) noexcept
+    template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
+__host__ inline void CopySize(const _PTR_DST<T_DST, D_DST>& dst,
+    const _PTR_SRC<T_SRC, D_SRC>& src,
+    const size_t size) noexcept
 {
     static_assert(std::is_same_v<T_DST, T_SRC>, "Incompatible Source And Destination Raw Pointer Types");
-    
+
     cudaMemcpyKind memcpyKind;
 
     if constexpr (D_SRC == Device::CPU && D_DST == Device::CPU) {
         memcpyKind = cudaMemcpyKind::cudaMemcpyHostToHost;
-    } else if constexpr (D_SRC == Device::GPU && D_DST == Device::GPU) {
+        cudaMemcpy(dst, src, size, memcpyKind);
+    }
+    else if constexpr (D_SRC == Device::GPU && D_DST == Device::GPU) {
         memcpyKind = cudaMemcpyKind::cudaMemcpyDeviceToDevice;
-    } else if constexpr (D_SRC == Device::CPU && D_DST == Device::GPU) {
+        cudaMemcpy(dst, src, size, memcpyKind);
+    }
+    else if constexpr (D_SRC == Device::CPU && D_DST == Device::GPU) {
         memcpyKind = cudaMemcpyKind::cudaMemcpyHostToDevice;
-    } else if constexpr (D_SRC == Device::GPU && D_DST == Device::CPU) {
+        cudaMemcpy(dst, src, size, memcpyKind);
+    }
+    else if constexpr (D_SRC == Device::GPU && D_DST == Device::CPU) {
         memcpyKind = cudaMemcpyKind::cudaMemcpyDeviceToHost;
-    } else { static_assert(1 == 1, "Incompatible Destination and Source Arguments"); }
-
-    cudaMemcpy(dst, src, size, memcpyKind);
+        cudaMemcpy(dst, src, size, memcpyKind);
+    }
+    else { static_assert(1 == 1, "Incompatible Destination and Source Arguments"); }
 }
 
 template <template<typename, Device> typename _PTR_DST, typename T_DST, Device D_DST,
-          template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
+    template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
 __host__ __device__ inline void CopyCount(const _PTR_DST<T_DST, D_DST>& dst,
-                                          const _PTR_SRC<T_SRC, D_SRC>& src,
-                                          const size_t count) noexcept
+    const _PTR_SRC<T_SRC, D_SRC>& src,
+    const size_t count) noexcept
 {
     static_assert(std::is_same_v<T_DST, T_SRC>, "Incompatible Source And Destination Raw Pointer Types");
 
@@ -149,12 +161,12 @@ __host__ __device__ inline void CopyCount(const _PTR_DST<T_DST, D_DST>& dst,
 }
 
 template <template<typename, Device> typename _PTR_DST, typename T_DST, Device D_DST,
-          template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
+    template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
 __host__ __device__ inline void CopySingle(const _PTR_DST<T_DST, D_DST>& dst,
-                                           const _PTR_SRC<T_SRC, D_SRC>& src) noexcept
+    const _PTR_SRC<T_SRC, D_SRC>& src) noexcept
 {
     static_assert(std::is_same_v<T_DST, T_SRC>, "Incompatible Source And Destination Raw Pointer Types");
-    
+
     CopySize(dst, src, sizeof(T_DST));
 }
 
@@ -173,7 +185,7 @@ public:
         this->Free();
         this->m_ptr = nullptr;
     }
-    
+
     template <typename... _ARGS>
     __host__ __device__ inline UniquePointer(const _ARGS&... args) noexcept {
         this->Free();
@@ -188,7 +200,7 @@ public:
     __host__ __device__ inline UniquePointer(UniquePointer<T, D>&& o) noexcept {
         this->Free();
         this->m_ptr = o.m_ptr;
-        o.m_ptr     = nullptr;
+        o.m_ptr = nullptr;
     }
 
     __host__ __device__ inline void Free() const noexcept {
@@ -210,17 +222,17 @@ public:
     __host__ __device__ inline UniquePointer<T, D>& operator=(UniquePointer<T, D>&& o) noexcept {
         this->Free();
         this->m_ptr = o;
-        o.m_ptr     = nullptr;
+        o.m_ptr = nullptr;
         return *this;
     }
 
     __host__ __device__ inline const Pointer<T, D>& GetPointer() const noexcept { return this->m_ptr; }
 
-    __host__ __device__ inline operator const Pointer<T, D>&() const noexcept { return this->m_ptr; }
+    __host__ __device__ inline operator const Pointer<T, D>& () const noexcept { return this->m_ptr; }
 
-    __host__ __device__ inline operator T* const&() const noexcept { return this->m_ptr; }
+    __host__ __device__ inline operator T* () const noexcept { return this->m_ptr; }
 
-    __host__ __device__ inline T* const operator->() const noexcept { return this->m_ptr; }
+    __host__ __device__ inline T* operator->() const noexcept { return this->m_ptr; }
 
     __host__ __device__ inline       T& operator[](const size_t i)       noexcept { return *(this->m_ptr + i); }
     __host__ __device__ inline const T& operator[](const size_t i) const noexcept { return *(this->m_ptr + i); }
@@ -249,23 +261,23 @@ private:
 
 protected:
     __host__ __device__ inline void SetPointer(const Pointer<T, D>& pBegin) noexcept { this->m_pBegin = pBegin; }
-    __host__ __device__ inline void SetCount  (const size_t count)                    noexcept { this->m_count  = count;  }
+    __host__ __device__ inline void SetCount(const size_t count)                    noexcept { this->m_count = count; }
 
     __host__ __device__ inline operator T*& () noexcept { return this->m_pBegin; }
 
 public:
-    __host__ __device__ inline ArrayView() noexcept = default;
+    inline ArrayView() noexcept = default;
 
     __host__ __device__ inline ArrayView(const Pointer<T, D>& pBegin, const size_t count) noexcept
         : m_pBegin(pBegin), m_count(count)
     {  }
 
     __host__ __device__ inline const Pointer<T, D>& GetPointer() const noexcept { return this->m_pBegin; }
-    __host__ __device__ inline const size_t&                  GetCount()   const noexcept { return this->m_count;  }
+    __host__ __device__ inline const size_t& GetCount()   const noexcept { return this->m_count; }
 
-    __host__ __device__ inline operator const Pointer<T, D>&() const noexcept { return this->m_pBegin; }
+    __host__ __device__ inline operator const Pointer<T, D>& () const noexcept { return this->m_pBegin; }
 
-    __host__ __device__ inline operator T* const&() const noexcept { return this->m_pBegin; }
+    __host__ __device__ inline operator T* const& () const noexcept { return this->m_pBegin; }
 
     __host__ __device__ inline       T& operator[](const size_t i)       noexcept { return *(this->m_pBegin + i); }
     __host__ __device__ inline const T& operator[](const size_t i) const noexcept { return *(this->m_pBegin + i); }
@@ -292,7 +304,7 @@ public:
         this->SetCount(count);
         this->SetPointer(AllocateCount<T, D>(count));
     }
-    
+
     template <Device D_O>
     __host__ __device__ inline Array(const Array<T, D_O>& o) noexcept
         : Array(o.GetCount())
@@ -351,119 +363,119 @@ struct Vec4 {
     }
 
 
-    __host__ __device__ inline float GetLength3D() const noexcept { return sqrt(this->x*this->x+this->y*this->y+this->z*this->z); }
-    __host__ __device__ inline float GetLength4D() const noexcept { return sqrt(this->x*this->x+this->y*this->y+this->z*this->z+this->w*this->w); }
+    __host__ __device__ inline float GetLength3D() const noexcept { return sqrt(this->x * this->x + this->y * this->y + this->z * this->z); }
+    __host__ __device__ inline float GetLength4D() const noexcept { return sqrt(this->x * this->x + this->y * this->y + this->z * this->z + this->w * this->w); }
 
     __host__ __device__ inline void Normalize3D() noexcept { this->operator/=(this->GetLength3D()); }
     __host__ __device__ inline void Normalize4D() noexcept { this->operator/=(this->GetLength4D()); }
 
     template <typename _U>
     __host__ __device__ inline Vec4<T>& operator+=(const Vec4<_U>& o) noexcept {
-      this->x += o.x; this->y += o.y; this->z += o.z; this->w += o.w;
-      return *this; 
+        this->x += o.x; this->y += o.y; this->z += o.z; this->w += o.w;
+        return *this;
     }
 
     template <typename _U>
     __host__ __device__ inline Vec4<T>& operator-=(const Vec4<_U>& o) noexcept {
-      this->x -= o.x; this->y -= o.y; this->z -= o.z; this->w -= o.w;
-      return *this;
+        this->x -= o.x; this->y -= o.y; this->z -= o.z; this->w -= o.w;
+        return *this;
     }
 
     template <typename _U>
     __host__ __device__ inline Vec4<T>& operator*=(const Vec4<_U>& o) noexcept {
-      this->x *= o.x; this->y *= o.y; this->z *= o.z; this->w *= o.w;
-      return *this;
+        this->x *= o.x; this->y *= o.y; this->z *= o.z; this->w *= o.w;
+        return *this;
     }
 
     template <typename _U>
     __host__ __device__ inline Vec4<T>& operator/=(const Vec4<_U>& o) noexcept {
-      this->x /= o.x; this->y /= o.y; this->z /= o.z; this->w /= o.w;
-      return *this;
+        this->x /= o.x; this->y /= o.y; this->z /= o.z; this->w /= o.w;
+        return *this;
     }
 
 
     template <typename _U>
     __host__ __device__ inline Vec4<T>& operator+=(const _U& n) noexcept {
-      this->x += n; this->y += n; this->z += n; this->w += n;
-      return *this;
+        this->x += n; this->y += n; this->z += n; this->w += n;
+        return *this;
     }
 
     template <typename _U>
     __host__ __device__ inline Vec4<T>& operator-=(const _U& n) noexcept {
-      this->x -= n; this->y -= n; this->z -= n; this->w -= n;
-      return *this;
+        this->x -= n; this->y -= n; this->z -= n; this->w -= n;
+        return *this;
     }
 
     template <typename _U>
     __host__ __device__ inline Vec4<T>& operator*=(const _U& n) noexcept {
-      this->x *= n; this->y *= n; this->z *= n; this->w *= n;
-      return *this;
+        this->x *= n; this->y *= n; this->z *= n; this->w *= n;
+        return *this;
     }
 
     template <typename _U>
     __host__ __device__ inline Vec4<T>& operator/=(const _U& n) noexcept {
-      this->x /= n; this->y /= n; this->z /= n; this->w /= n;
-      return *this;
+        this->x /= n; this->y /= n; this->z /= n; this->w /= n;
+        return *this;
     }
 
     static __host__ __device__ inline float DotProduct3D(const Vec4<T>& a, const Vec4<T>& b) noexcept {
-      return a.x * b.x + a.y * b.y + a.z * b.z;
+        return a.x * b.x + a.y * b.y + a.z * b.z;
     }
 
     static __host__ __device__ inline float DotProduct4D(const Vec4<T>& a, const Vec4<T>& b) noexcept {
-      return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+        return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
     }
 
     static __host__ __device__ inline Vec4<T> Normalized3D(Vec4<T> v) noexcept {
-      v.Normalize3D();
-      return v;
+        v.Normalize3D();
+        return v;
     }
 
     static __host__ __device__ inline Vec4<T> Normalized4D(Vec4<T> v) noexcept {
-      v.Normalize4D();
-      return v;
+        v.Normalize4D();
+        return v;
     }
 }; // Vec4<T>
 
 template <typename T, typename _U>
 __host__ __device__ inline auto operator+(const Vec4<T>& a, const Vec4<_U>& b) noexcept -> Vec4<decltype(a.x + b.x)> {
-  return Vec4<decltype(a.x + b.x)>{ a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w }; 
+    return Vec4<decltype(a.x + b.x)>{ a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w };
 }
 
 template <typename T, typename _U>
 __host__ __device__ inline auto operator-(const Vec4<T>& a, const Vec4<_U>& b) noexcept -> Vec4<decltype(a.x - b.x)> {
-  return Vec4<decltype(a.x - b.x)>{ a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w };
+    return Vec4<decltype(a.x - b.x)>{ a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w };
 }
 
 template <typename T, typename _U>
-__host__ __device__ inline auto operator*(const Vec4<T>& a, const Vec4<_U>& b) noexcept -> Vec4<decltype(a.x * b.x)> {
-  return Vec4<decltype(a.x * b.x)>{ a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w };
+__host__ __device__ inline auto operator*(const Vec4<T>& a, const Vec4<_U>& b) noexcept -> Vec4<decltype(a.x* b.x)> {
+    return Vec4<decltype(a.x* b.x)>{ a.x* b.x, a.y* b.y, a.z* b.z, a.w* b.w };
 }
 
 template <typename T, typename _U>
 __host__ __device__ inline auto operator/(const Vec4<T>& a, const Vec4<_U>& b) noexcept -> Vec4<decltype(a.x / b.x)> {
-  return Vec4<decltype(a.x / b.x)>{ a.x / b.x, a.y / b.y, a.z / b.z, a.w / b.w };
+    return Vec4<decltype(a.x / b.x)>{ a.x / b.x, a.y / b.y, a.z / b.z, a.w / b.w };
 }
 
 
 template <typename T, typename _U>
 __host__ __device__ inline auto operator+(const Vec4<T>& a, const _U& n) noexcept -> Vec4<decltype(a.x + n)> {
-  return Vec4<decltype(a.x + n)>{ a.x + n, a.y + n, a.z + n, a.w + n };
+    return Vec4<decltype(a.x + n)>{ a.x + n, a.y + n, a.z + n, a.w + n };
 }
 
 template <typename T, typename _U>
 __host__ __device__ inline auto operator-(const Vec4<T>& a, const _U& n) noexcept -> Vec4<decltype(a.x - n)> {
-  return Vec4<decltype(a.x - n)>{ a.x - n, a.y - n, a.z - n, a.w - n };
+    return Vec4<decltype(a.x - n)>{ a.x - n, a.y - n, a.z - n, a.w - n };
 }
 
 template <typename T, typename _U>
-__host__ __device__ inline auto operator*(const Vec4<T>& a, const _U& n) noexcept -> Vec4<decltype(a.x * n)> {
-  return Vec4<decltype(a.x * n)>{ a.x * n, a.y * n, a.z * n, a.w * n };
+__host__ __device__ inline auto operator*(const Vec4<T>& a, const _U& n) noexcept -> Vec4<decltype(a.x* n)> {
+    return Vec4<decltype(a.x* n)>{ a.x* n, a.y* n, a.z* n, a.w* n };
 }
 
 template <typename T, typename _U>
 __host__ __device__ inline auto operator/(const Vec4<T>& a, const _U& n) noexcept -> Vec4<decltype(a.x / n)> {
-  return Vec4<decltype(a.x / n)>{ a.x / n, a.y / n, a.z / n, a.w / n };
+    return Vec4<decltype(a.x / n)>{ a.x / n, a.y / n, a.z / n, a.w / n };
 }
 
 
@@ -493,16 +505,16 @@ typedef Vec4<float>        Vec4f32;
 
 __device__ inline Vec4f32 Random3DUnitVector(curandState_t* const randState) noexcept {
     return Vec4f32::Normalized3D(Vec4f32(2.0f * RandomFloat(randState) - 1.0f,
-                                         2.0f * RandomFloat(randState) - 1.0f,
-                                         2.0f * RandomFloat(randState) - 1.0f,
-                                         0.f));
+        2.0f * RandomFloat(randState) - 1.0f,
+        2.0f * RandomFloat(randState) - 1.0f,
+        0.f));
 }
 
 template <typename T, Device D>
 class Image {
 private:
-    std::uint16_t m_width   = 0;
-    std::uint16_t m_height  = 0;
+    std::uint16_t m_width = 0;
+    std::uint16_t m_height = 0;
     std::uint32_t m_nPixels = 0;
 
     Array<T, D> m_pArray;
@@ -510,15 +522,15 @@ private:
 public:
     __host__ __device__ inline Image() = default;
 
-    __host__ __device__ inline Image(const std::uint16_t width, const std::uint16_t height) noexcept 
+    __host__ __device__ inline Image(const std::uint16_t width, const std::uint16_t height) noexcept
         : m_width(width),
-          m_height(height),
-          m_nPixels(static_cast<std::uint32_t>(width) * height),
-          m_pArray(Array<T, D>(this->m_nPixels))
+        m_height(height),
+        m_nPixels(static_cast<std::uint32_t>(width)* height),
+        m_pArray(Array<T, D>(this->m_nPixels))
     { }
 
-    __host__ __device__ inline std::uint16_t GetWidth()      const noexcept { return this->m_width;   }
-    __host__ __device__ inline std::uint16_t GetHeight()     const noexcept { return this->m_height;  }
+    __host__ __device__ inline std::uint16_t GetWidth()      const noexcept { return this->m_width; }
+    __host__ __device__ inline std::uint16_t GetHeight()     const noexcept { return this->m_height; }
     __host__ __device__ inline std::uint32_t GetPixelCount() const noexcept { return this->m_nPixels; }
 
     __host__ __device__ inline Pointer<T, D> GetPtr() const noexcept { return this->m_pArray; }
@@ -555,7 +567,7 @@ struct Camera {
 }; // Camera
 
 struct RenderParams {
-    size_t width  = 0;
+    size_t width = 0;
     size_t height = 0;
 
     Camera camera;
@@ -597,48 +609,49 @@ __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixe
     const RenderParams& renderParams = *pRanderParams;
 
     Ray ray;
-    ray.origin    = Vec4f32(0.f, 0.f, 0.f, 0.f);
+    ray.origin = Vec4f32(0.f, 0.f, 0.f, 0.f);//TODO:: camera position
     ray.direction = Vec4f32::Normalized3D(Vec4f32(
-        (2.0f *  ((pixelX + RandomFloat(randState)) / static_cast<float>(renderParams.width))  - 1.0f) * tan(renderParams.camera.fov) * static_cast<float>(renderParams.width) / static_cast<float>(renderParams.height),
+        (2.0f  * ((pixelX + RandomFloat(randState)) / static_cast<float>(renderParams.width))  - 1.0f) * tan(renderParams.camera.fov) * static_cast<float>(renderParams.width) / static_cast<float>(renderParams.height),
         (-2.0f * ((pixelY + RandomFloat(randState)) / static_cast<float>(renderParams.height)) + 1.0f) * tan(renderParams.camera.fov),
-        1.0f, 0.f));
-    
+        1.0f,
+        0.f));
+
     return ray;
 }
 
 __device__ Intersection
 RayIntersects(const Ray& ray, const Sphere& sphere) noexcept {
-    const Vec4f32 L   = sphere.center - ray.origin;
+    const Vec4f32 L = sphere.center - ray.origin;
     const float   tca = Vec4f32::DotProduct3D(L, ray.direction);
-    const float   d2  = Vec4f32::DotProduct3D(L, L) - tca * tca;
-  
+    const float   d2 = Vec4f32::DotProduct3D(L, L) - tca * tca;
+
     if (d2 > sphere.radius)
-      return Intersection{{}, FLT_MAX};
-    
+        return Intersection{ {}, FLT_MAX };
+
     const float thc = sqrt(sphere.radius - d2);
     float t0 = tca - thc;
     float t1 = tca + thc;
-  
+
     if (t0 > t1) {
-      const float tmp = t0;
-      t0 = t1;
-      t1 = tmp;
+        const float tmp = t0;
+        t0 = t1;
+        t1 = tmp;
     }
-  
+
     if (t0 < EPSILON) {
-      t0 = t1;
-  
-      if (t0 < 0)
-        return Intersection{{}, FLT_MAX};
+        t0 = t1;
+
+        if (t0 < 0)
+            return Intersection{ {}, FLT_MAX };
     }
-  
+
     Intersection intersection;
-    intersection.inRay    = ray;
-    intersection.t        = t0;
+    intersection.inRay = ray;
+    intersection.t = t0;
     intersection.location = ray.origin + t0 * ray.direction;
-    intersection.normal   = Vec4f32::Normalized3D(intersection.location - sphere.center);
+    intersection.normal = Vec4f32::Normalized3D(intersection.location - sphere.center);
     intersection.material = sphere.material;
-  
+
     return intersection;
 }
 
@@ -651,23 +664,23 @@ RayIntersects(const Ray& ray, const Plane& plane) noexcept {
 
         if (t >= 0) {
             Intersection intersection;
-            intersection.inRay    = ray;
-            intersection.t        = t;
+            intersection.inRay = ray;
+            intersection.t = t;
             intersection.location = ray.origin + t * ray.direction;
-            intersection.normal   = plane.normal;
+            intersection.normal = plane.normal;
             intersection.material = plane.material;
 
             return intersection;
         }
     }
 
-  return Intersection{{}, FLT_MAX};
+    return Intersection{ {}, FLT_MAX };
 }
 
 __device__ Intersection
 FindClosestIntersection(const Ray& ray,
-                        const GPU_ArrayView<Sphere>& pSpheres,
-                        const GPU_ArrayView<Plane>&  pPlanes) noexcept {
+    const GPU_ArrayView<Sphere>& pSpheres,
+    const GPU_ArrayView<Plane>& pPlanes) noexcept {
     Intersection closest;
     closest.t = FLT_MAX;
 
@@ -690,50 +703,53 @@ FindClosestIntersection(const Ray& ray,
 
 template <size_t _N>
 __device__ Colorf32 RayTrace(const Ray& ray,
-                             const GPU_Ptr<RenderParams>& pParams,
-                             const GPU_ArrayView<Sphere>& pSpheres,
-                             const GPU_ArrayView<Plane>&  pPlanes,
-                             curandState_t* const randState) {
+    const GPU_Ptr<RenderParams>& pParams,
+    const GPU_ArrayView<Sphere>& pSpheres,
+    const GPU_ArrayView<Plane>& pPlanes,
+    curandState_t* const randState) {
+
     auto intersection = FindClosestIntersection(ray, pSpheres, pPlanes);
 
     if constexpr (_N < MAX_REC) {
         if (intersection.t != FLT_MAX) {
             const Material& material = intersection.material;
-    
+
             Ray newRay;
-            newRay.origin    = intersection.location + EPSILON * intersection.normal;
+            newRay.origin = intersection.location + EPSILON * intersection.normal;
             newRay.direction = Random3DUnitVector(randState);
-    
+
             //return material.diffuse;
             const Colorf32 incomingColor = RayTrace<_N + 1u>(newRay, pParams, pSpheres, pPlanes, randState);
-    
+
             const float dotProduct = Clamp(Vec4f32::DotProduct3D(newRay.direction, intersection.normal), 0.f, 1.f);
 
-            Colorf32 finalColor = material.emittance + material.diffuse * incomingColor * 3.141592f;
+            Colorf32 finalColor = material.emittance + material.diffuse * incomingColor * 2 * 3.1415926f;
             finalColor.x = Clamp(finalColor.x, 0.f, 1.f);
             finalColor.y = Clamp(finalColor.y, 0.f, 1.f);
             finalColor.z = Clamp(finalColor.z, 0.f, 1.f);
             finalColor.w = Clamp(finalColor.w, 0.f, 1.f);
-    
-            return finalColor;
-        }
-    }
 
-    // Sky Color
-    //const float ratio = (threadIdx.y + blockIdx.y * blockDim.y) / float(pParams->height);
-//
-    //const auto skyLightBlue = Vec4f32(0.78f, 0.96f, 1.00f, 1.0f);
-    //const auto skyDarkBlue  = Vec4f32(0.01f, 0.84f, 0.93f, 1.0f);
-    //
-    //return Vec4f32(skyLightBlue * ratio + skyDarkBlue * (1 - ratio));
-    return Vec4f32{0.f, 0.f, 0.f, 1.0f};
+            return finalColor;
+        } else {
+            // Sky Color
+            const float ratio = (threadIdx.y + blockIdx.y * blockDim.y) / float(pParams->height);
+
+            const auto skyLightBlue = Vec4f32(0.78f, 0.96f, 1.00f, 1.0f);
+            const auto skyDarkBlue  = Vec4f32(0.01f, 0.84f, 0.93f, 1.0f);
+            
+            return Vec4f32(skyLightBlue * ratio + skyDarkBlue * (1 - ratio));
+        }
+    } else {
+        // Black
+        return Vec4f32{0.f, 0.f, 0.F, 1.f};
+    }
 }
 
 // Can't pass arguments via const& because these variables exist on the host and not on the device
 __global__ void RayTracingDispatcher(const GPU_Ptr<Coloru8> pSurface,
-                                     const GPU_Ptr<RenderParams> pParams,
-                                     const GPU_ArrayView<Sphere> pSpheres,
-                                     const GPU_ArrayView<Plane>  pPlanes) {
+    const GPU_Ptr<RenderParams> pParams,
+    const GPU_ArrayView<Sphere> pSpheres,
+    const GPU_ArrayView<Plane>  pPlanes) {
 
     curandState_t randState;
 
@@ -777,12 +793,12 @@ private:
 
 public:
     PolarTracer(const RenderParams& renderParams, const CPU_Array<Sphere>& spheres, const CPU_Array<Plane>& planes)
-        : host{renderParams}
+        : host{ renderParams }
     {
-        this->device.m_frameBuffer   = Image<Coloru8, Device::GPU>(renderParams.width, renderParams.height);
+        this->device.m_frameBuffer = Image<Coloru8, Device::GPU>(renderParams.width, renderParams.height);
         this->device.m_pRenderParams = AllocateSingle<RenderParams, Device::GPU>();
-        this->device.m_spheres       = GPU_Array<Sphere>(spheres);
-        this->device.m_planes        = GPU_Array<Plane>(planes);
+        this->device.m_spheres = GPU_Array<Sphere>(spheres);
+        this->device.m_planes = GPU_Array<Plane>(planes);
 
         const auto src = CPU_Ptr<RenderParams>(&this->host.m_renderParams);
         CopySingle(this->device.m_pRenderParams, src);
@@ -796,15 +812,15 @@ public:
         // Allocate 1 thread per pixel of coordinates (X,Y). Use as many blocks in the grid as needed
         // The RayTrace function will use the thread's index (both in the grid and in a block) to determine the pixel it will trace rays through
         const dim3 dimBlock = dim3(16, 16); // 32 warps of 32 threads per block (=1024 threads in total which is the hardware limit)
-        const dim3 dimGrid  = dim3(std::ceil(this->host.m_renderParams.width  / static_cast<float>(dimBlock.x)),
-                                   std::ceil(this->host.m_renderParams.height / static_cast<float>(dimBlock.y)));
+        const dim3 dimGrid = dim3(std::ceil(this->host.m_renderParams.width / static_cast<float>(dimBlock.x)),
+            std::ceil(this->host.m_renderParams.height / static_cast<float>(dimBlock.y)));
 
         // trace rays through each pixel
         RayTracingDispatcher<<<dimGrid, dimBlock>>>(this->device.m_frameBuffer.GetPtr(),
-                                                    this->device.m_pRenderParams,
-                                                    this->device.m_spheres,
-                                                    this->device.m_planes);
-    
+            this->device.m_pRenderParams,
+            this->device.m_spheres,
+            this->device.m_planes);
+
         // wait for the job to finish
         printf("%s\n", cudaGetErrorString(cudaDeviceSynchronize()));
 
@@ -816,67 +832,69 @@ public:
 #define WIDTH  (1920)
 #define HEIGHT (1080)
 
-int main(int argc, char** argv) {    
+#include <iostream>
+
+int main(int argc, char** argv) {
     Image<Coloru8, Device::CPU> image(WIDTH, HEIGHT);
 
     RenderParams renderParams;
 
-    renderParams.width  = WIDTH;
+    renderParams.width = WIDTH;
     renderParams.height = HEIGHT;
     renderParams.camera.position = Vec4f32(0.f, 0.f, -2.f, 0.f);
-    renderParams.camera.fov      = M_PI / 4.f;
+    renderParams.camera.fov = 3.141592f / 4.f;
 
-    CPU_Array<Sphere> spheres(4);
-    spheres[0].center = Vec4f32{0.0f, 0.0f, 2.f, 0.f};
-    spheres[0].radius = 0.25f;
-    spheres[0].material.diffuse   = Colorf32{1.f, 0.f, 1.f, 1.f};
-    spheres[0].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
-    
-    spheres[1].center = Vec4f32{0.f, -.8f, 1.f, 0.0f};
-    spheres[1].radius = 0.05f;
-    spheres[1].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
-    spheres[1].material.emittance = Colorf32{1.f, 1.f, 1.f, 1.f};
+   CPU_Array<Sphere> spheres(5);
+   spheres[0].center = Vec4f32{ 0.0f, 0.0f, 2.f, 0.f };
+   spheres[0].radius = 0.25f;
+   spheres[0].material.diffuse   = Colorf32{ 1.f, 0.f, 1.f, 1.f };
+   spheres[0].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
 
-    spheres[2].center = Vec4f32{-1.0f, 0.0f, 1.5f, 0.f};
-    spheres[2].radius = 0.25f;
-    spheres[2].material.diffuse   = Colorf32{0.f, 1.f, 1.f, 1.f};
-    spheres[2].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
+   spheres[1].center = Vec4f32{ 0.f, -.8f, 1.f, 0.0f };
+   spheres[1].radius = 0.05f;
+   spheres[1].material.diffuse   = Colorf32{ 1.f, 1.f, 1.f, 1.f };
+   spheres[1].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
 
-    spheres[3].center = Vec4f32{1.0f, 0.0f, 1.5f, 0.f};
-    spheres[3].radius = 0.25f;
-    spheres[3].material.diffuse   = Colorf32{1.f, 1.f, 0.f, 1.f};
-    spheres[3].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
+   spheres[2].center = Vec4f32{ -0.75f, 0.0f, 1.5f, 0.f };
+   spheres[2].radius = 0.25f;
+   spheres[2].material.diffuse   = Colorf32{ 0.f, 1.f, 1.f, 1.f };
+   spheres[2].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
 
-    //spheres[4].center = Vec4f32{0.4f, 0.0f, 0.8f, 0.f};
-    //spheres[4].radius = 0.15f;
-    //spheres[4].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
-    //spheres[4].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
+   spheres[3].center = Vec4f32{ 1.0f, 0.0f, 1.5f, 0.f };
+   spheres[3].radius = 0.25f;
+   spheres[3].material.diffuse   = Colorf32{ 1.f, 1.f, 0.f, 1.f };
+   spheres[3].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
 
-    CPU_Array<Plane> planes(5);
-    planes[0].position = Vec4f32{0.f, 0.f, 2.f, 0.f};
-    planes[0].normal   = Vec4f32{0.f, 0.f, -1.f, 0.f};
-    planes[0].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
-    planes[0].material.emittance = Colorf32{1.f, 1.f, 1.f, 1.f};
+   spheres[4].center = Vec4f32{0.4f, 0.0f, 0.8f, 0.f};
+   spheres[4].radius = 0.15f;
+   spheres[4].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
+   spheres[4].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
 
-    planes[1].position = Vec4f32{1.25f, 0.f, 0.f, 0.f};
-    planes[1].normal   = Vec4f32{-1.f, 0.f, 0.f, 0.f};
-    planes[1].material.diffuse   = Colorf32{1.f, 0.f, 0.f, 1.f};
-    planes[1].material.emittance = Colorf32{0.f, 0.f, 0.f, 0.f};
-
-    planes[2].position = Vec4f32{-1.25f, 0.f, 0.f, 0.f};
-    planes[2].normal   = Vec4f32{1.f, 0.f, 0.f, 0.f};
-    planes[2].material.diffuse   = Colorf32{0.f, 1.f, 0.f, 1.f};
-    planes[2].material.emittance = Colorf32{0.f, 0.f, 0.f, 0.f};
-
-    planes[3].position = Vec4f32{0.f, -1.0f, 0.f, 0.f};
-    planes[3].normal   = Vec4f32{0.f, 1.f, 0.f, 0.f};
-    planes[3].material.diffuse   = Colorf32{0.f, 0.f, 1.f, 1.f};
-    planes[3].material.emittance = Colorf32{0.f, 0.f, 0.f, 0.f};
-
-    planes[4].position = Vec4f32{0.f, 1.f, 0.f, 0.f};
-    planes[4].normal   = Vec4f32{0.f, -1.f, 0.f, 0.f};
-    planes[4].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
-    planes[4].material.emittance = Colorf32{0.f, 0.f, 0.f, 0.f};
+   CPU_Array<Plane> planes(5);
+   planes[0].position = Vec4f32{ 0.f, 0.f, 2.f, 0.f };
+   planes[0].normal = Vec4f32{ 0.f, 0.f, -1.f, 0.f };
+   planes[0].material.diffuse = Colorf32{ 1.f, 1.f, 1.f, 1.f };
+   planes[0].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
+   
+   planes[1].position = Vec4f32{ 1.25f, 0.f, 0.f, 0.f };
+   planes[1].normal = Vec4f32{ -1.f, 0.f, 0.f, 0.f };
+   planes[1].material.diffuse = Colorf32{ 1.f, 0.f, 0.f, 1.f };
+   planes[1].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
+   
+   planes[2].position = Vec4f32{ -1.25f, 0.f, 0.f, 0.f };
+   planes[2].normal = Vec4f32{ 1.f, 0.f, 0.f, 0.f };
+   planes[2].material.diffuse = Colorf32{ 0.f, 1.f, 0.f, 1.f };
+   planes[2].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
+   
+   planes[3].position = Vec4f32{ 0.f, -1.0f, 0.f, 0.f };
+   planes[3].normal = Vec4f32{ 0.f, 1.f, 0.f, 0.f };
+   planes[3].material.diffuse = Colorf32{ 0.f, 0.f, 1.f, 1.f };
+   planes[3].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
+   
+   planes[4].position = Vec4f32{ 0.f, 1.f, 0.f, 0.f };
+   planes[4].normal = Vec4f32{ 0.f, -1.f, 0.f, 0.f };
+   planes[4].material.diffuse = Colorf32{ 1.f, 1.f, 1.f, 1.f };
+   planes[4].material.emittance = Colorf32{ 1.f, 1.f, 1.f, 1.f };
 
     PolarTracer pt(renderParams, spheres, planes);
     pt.RayTraceScene(image);

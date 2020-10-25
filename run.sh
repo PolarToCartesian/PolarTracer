@@ -1,4 +1,4 @@
-make
+nvcc --std=c++17 src/PolarTracer.cu -o PolarTracer
 ./PolarTracer
 convert frame.pam frame.png
 rm frame.pam
