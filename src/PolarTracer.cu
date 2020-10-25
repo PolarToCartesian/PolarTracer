@@ -37,7 +37,7 @@ private:
     T* m_raw = nullptr;
 
 public:
-    __host__ __device__ inline Pointer() noexcept {  }
+    Pointer() = default;
 
     __host__ __device__ inline Pointer(T* const p)              noexcept { this->SetPointer(p); }
     __host__ __device__ inline Pointer(const Pointer<T, D>& o) noexcept { this->SetPointer(o); }
@@ -46,7 +46,7 @@ public:
     __host__ __device__ inline void SetPointer(const Pointer<T, D>& o) noexcept { this->SetPointer(o.m_raw); }
 
     __host__ __device__ inline T*& GetPointer()       noexcept { return this->m_raw; }
-    __host__ __device__ inline T* const& GetPointer() const noexcept { return this->m_raw; }
+    __host__ __device__ inline T*  GetPointer() const noexcept { return this->m_raw; }
 
     template <typename U>
     __host__ __device__ inline Pointer<U, D> AsPointerTo() const noexcept {
@@ -57,7 +57,7 @@ public:
     __host__ __device__ inline void operator=(const Pointer<T, D>& o) noexcept { this->SetPointer(o); }
 
     __host__ __device__ inline operator T*& ()       noexcept { return this->m_raw; }
-    __host__ __device__ inline operator T* const& () const noexcept { return this->m_raw; }
+    __host__ __device__ inline operator T*  () const noexcept { return this->m_raw; }
 
     __host__ __device__ inline std::conditional_t<std::is_same_v<T, void>, int, T>& operator[](const size_t i) noexcept {
         static_assert(!std::is_same_v<T, void>, "Can't Index A Pointer To A Void");
@@ -81,11 +81,10 @@ using GPU_Ptr = Pointer<T, Device::GPU>;
 
 // Memory Allocation
 template <typename T, Device D>
-__host__ __device__ inline Pointer<T, D> AllocateSize(const size_t size) noexcept {
+inline Pointer<T, D> AllocateSize(const size_t size) noexcept {
     if constexpr (D == Device::CPU) {
         return CPU_Ptr<T>(reinterpret_cast<T*>(std::malloc(size)));
-    }
-    else {
+    } else {
         T* p;
         cudaMalloc(reinterpret_cast<void**>(&p), size);
         return GPU_Ptr<T>(p);
@@ -93,23 +92,22 @@ __host__ __device__ inline Pointer<T, D> AllocateSize(const size_t size) noexcep
 }
 
 template <typename T, Device D>
-__host__ __device__ inline Pointer<T, D> AllocateCount(const size_t count) noexcept {
+inline Pointer<T, D> AllocateCount(const size_t count) noexcept {
     return AllocateSize<T, D>(count * sizeof(T));
 }
 
 template <typename T, Device D>
-__host__ __device__ inline Pointer<T, D> AllocateSingle() noexcept {
+inline Pointer<T, D> AllocateSingle() noexcept {
     return AllocateSize<T, D>(sizeof(T));
 }
 
 // Memory Deallocation
 
 template <typename T, Device D>
-__host__ __device__ inline void Free(const Pointer<T, D>& p) noexcept {
+inline void Free(const Pointer<T, D>& p) noexcept {
     if constexpr (D == Device::CPU) {
         std::free(p);
-    }
-    else {
+    } else {
         cudaFree(p.template AsPointerTo<void>());
     }
 }
@@ -121,10 +119,10 @@ __host__ __device__ inline void Free(const Pointer<T, D>& p) noexcept {
 // base type T accessible by the device D.
 
 template <template<typename, Device> typename _PTR_DST, typename T_DST, Device D_DST,
-    template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
-__host__ inline void CopySize(const _PTR_DST<T_DST, D_DST>& dst,
-    const _PTR_SRC<T_SRC, D_SRC>& src,
-    const size_t size) noexcept
+          template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
+inline void CopySize(const _PTR_DST<T_DST, D_DST>& dst,
+                     const _PTR_SRC<T_SRC, D_SRC>& src,
+                     const size_t size) noexcept
 {
     static_assert(std::is_same_v<T_DST, T_SRC>, "Incompatible Source And Destination Raw Pointer Types");
 
@@ -133,27 +131,23 @@ __host__ inline void CopySize(const _PTR_DST<T_DST, D_DST>& dst,
     if constexpr (D_SRC == Device::CPU && D_DST == Device::CPU) {
         memcpyKind = cudaMemcpyKind::cudaMemcpyHostToHost;
         cudaMemcpy(dst, src, size, memcpyKind);
-    }
-    else if constexpr (D_SRC == Device::GPU && D_DST == Device::GPU) {
+    } else if constexpr (D_SRC == Device::GPU && D_DST == Device::GPU) {
         memcpyKind = cudaMemcpyKind::cudaMemcpyDeviceToDevice;
         cudaMemcpy(dst, src, size, memcpyKind);
-    }
-    else if constexpr (D_SRC == Device::CPU && D_DST == Device::GPU) {
+    } else if constexpr (D_SRC == Device::CPU && D_DST == Device::GPU) {
         memcpyKind = cudaMemcpyKind::cudaMemcpyHostToDevice;
         cudaMemcpy(dst, src, size, memcpyKind);
-    }
-    else if constexpr (D_SRC == Device::GPU && D_DST == Device::CPU) {
+    } else if constexpr (D_SRC == Device::GPU && D_DST == Device::CPU) {
         memcpyKind = cudaMemcpyKind::cudaMemcpyDeviceToHost;
         cudaMemcpy(dst, src, size, memcpyKind);
-    }
-    else { static_assert(1 == 1, "Incompatible Destination and Source Arguments"); }
+    } else { static_assert(1 == 1, "Incompatible Destination and Source Arguments"); }
 }
 
 template <template<typename, Device> typename _PTR_DST, typename T_DST, Device D_DST,
-    template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
-__host__ __device__ inline void CopyCount(const _PTR_DST<T_DST, D_DST>& dst,
-    const _PTR_SRC<T_SRC, D_SRC>& src,
-    const size_t count) noexcept
+         template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
+inline void CopyCount(const _PTR_DST<T_DST, D_DST>& dst,
+                                          const _PTR_SRC<T_SRC, D_SRC>& src,
+                                          const size_t count) noexcept
 {
     static_assert(std::is_same_v<T_DST, T_SRC>, "Incompatible Source And Destination Raw Pointer Types");
 
@@ -161,9 +155,9 @@ __host__ __device__ inline void CopyCount(const _PTR_DST<T_DST, D_DST>& dst,
 }
 
 template <template<typename, Device> typename _PTR_DST, typename T_DST, Device D_DST,
-    template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
-__host__ __device__ inline void CopySingle(const _PTR_DST<T_DST, D_DST>& dst,
-    const _PTR_SRC<T_SRC, D_SRC>& src) noexcept
+          template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
+inline void CopySingle(const _PTR_DST<T_DST, D_DST>& dst,
+                                           const _PTR_SRC<T_SRC, D_SRC>& src) noexcept
 {
     static_assert(std::is_same_v<T_DST, T_SRC>, "Incompatible Source And Destination Raw Pointer Types");
 
@@ -181,29 +175,29 @@ private:
     Pointer<T, D> m_ptr;
 
 public:
-    __host__ __device__ inline UniquePointer() noexcept {
+    inline UniquePointer() noexcept {
         this->Free();
         this->m_ptr = nullptr;
     }
 
     template <typename... _ARGS>
-    __host__ __device__ inline UniquePointer(const _ARGS&... args) noexcept {
+    inline UniquePointer(const _ARGS&... args) noexcept {
         this->Free();
         this->m_ptr = new (AllocateSingle<T, D>()) T(std::forward<_ARGS>(args)...);
     }
 
-    __host__ __device__ inline UniquePointer(const Pointer<T, D>& o)  noexcept {
+    inline UniquePointer(const Pointer<T, D>& o)  noexcept {
         this->Free();
         this->m_ptr = o;
     }
 
-    __host__ __device__ inline UniquePointer(UniquePointer<T, D>&& o) noexcept {
+    inline UniquePointer(UniquePointer<T, D>&& o) noexcept {
         this->Free();
         this->m_ptr = o.m_ptr;
         o.m_ptr = nullptr;
     }
 
-    __host__ __device__ inline void Free() const noexcept {
+    inline void Free() const noexcept {
         // Since we use placement new, we have to call T's destructor ourselves
         this->m_ptr->~T();
 
@@ -211,15 +205,15 @@ public:
         ::Free(this->m_ptr);
     }
 
-    __host__ __device__ inline ~UniquePointer() noexcept { this->Free(); }
+    inline ~UniquePointer() noexcept { this->Free(); }
 
-    __host__ __device__ inline UniquePointer<T, D>& operator=(const Pointer<T, D>& o)  noexcept {
+    inline UniquePointer<T, D>& operator=(const Pointer<T, D>& o)  noexcept {
         this->Free();
         this->m_ptr = o;
         return *this;
     }
 
-    __host__ __device__ inline UniquePointer<T, D>& operator=(UniquePointer<T, D>&& o) noexcept {
+    inline UniquePointer<T, D>& operator=(UniquePointer<T, D>&& o) noexcept {
         this->Free();
         this->m_ptr = o;
         o.m_ptr = nullptr;
@@ -238,8 +232,8 @@ public:
     __host__ __device__ inline const T& operator[](const size_t i) const noexcept { return *(this->m_ptr + i); }
 
 
-    __host__ __device__ UniquePointer(const UniquePointer<T, D>& o) = delete;
-    __host__ __device__ UniquePointer<T, D>& operator=(const UniquePointer<T, D>& o) = delete;
+    UniquePointer(const UniquePointer<T, D>& o) = delete;
+    UniquePointer<T, D>& operator=(const UniquePointer<T, D>& o) = delete;
 }; // UniquePointer<T, D>
 
 // Some aliases for the UniquePointer<T, D> class.
@@ -266,18 +260,18 @@ protected:
     __host__ __device__ inline operator T*& () noexcept { return this->m_pBegin; }
 
 public:
-    inline ArrayView() noexcept = default;
+    ArrayView() = default;
 
-    __host__ __device__ inline ArrayView(const Pointer<T, D>& pBegin, const size_t count) noexcept
+    inline ArrayView(const Pointer<T, D>& pBegin, const size_t count) noexcept
         : m_pBegin(pBegin), m_count(count)
     {  }
 
     __host__ __device__ inline const Pointer<T, D>& GetPointer() const noexcept { return this->m_pBegin; }
-    __host__ __device__ inline const size_t& GetCount()   const noexcept { return this->m_count; }
+    __host__ __device__ inline const size_t&        GetCount()   const noexcept { return this->m_count; }
 
     __host__ __device__ inline operator const Pointer<T, D>& () const noexcept { return this->m_pBegin; }
 
-    __host__ __device__ inline operator T* const& () const noexcept { return this->m_pBegin; }
+    __host__ __device__ inline operator T* () const noexcept { return this->m_pBegin; }
 
     __host__ __device__ inline       T& operator[](const size_t i)       noexcept { return *(this->m_pBegin + i); }
     __host__ __device__ inline const T& operator[](const size_t i) const noexcept { return *(this->m_pBegin + i); }
@@ -298,21 +292,21 @@ using GPU_ArrayView = ArrayView<T, Device::GPU>;
 template <typename T, Device D>
 class Array : public ArrayView<T, D> {
 public:
-    __host__ __device__ inline Array() noexcept = default;
+    inline Array() noexcept = default;
 
-    __host__ __device__ inline Array(const size_t count) noexcept {
+    inline Array(const size_t count) noexcept {
         this->SetCount(count);
         this->SetPointer(AllocateCount<T, D>(count));
     }
 
     template <Device D_O>
-    __host__ __device__ inline Array(const Array<T, D_O>& o) noexcept
+    inline Array(const Array<T, D_O>& o) noexcept
         : Array(o.GetCount())
     {
         CopyCount(*this, o, this->GetCount());
     }
 
-    __host__ __device__ inline Array(Array<T, D>&& o) noexcept
+    inline Array(Array<T, D>&& o) noexcept
     {
         this->SetCount(o.GetCount());
         o.SetCount(0);
@@ -320,7 +314,7 @@ public:
         o.SetPointer((T*)nullptr);
     }
 
-    __host__ __device__ inline Array<T, D>& operator=(Array<T, D>&& o) noexcept {
+    inline Array<T, D>& operator=(Array<T, D>&& o) noexcept {
         this->SetCount(o.GetCount());
         o.SetCount(0);
         this->SetPointer(o.GetPointer());
@@ -329,7 +323,7 @@ public:
         return *this;
     }
 
-    __host__ __device__ inline void Reserve(const size_t count) noexcept {
+    inline void Reserve(const size_t count) noexcept {
         const auto newCount = this->GetCount() + count;
         const auto newBegin = AllocateCount<T, D>(newCount);
 
@@ -340,7 +334,7 @@ public:
         this->SetCount(newCount);
     }
 
-    __host__ __device__ inline ~Array() noexcept {
+    inline ~Array() noexcept {
         Free(this->GetPointer());
     }
 }; // Array<T, D>
@@ -362,6 +356,12 @@ struct Vec4 {
         this->x = static_cast<T>(x); this->y = static_cast<T>(y); this->z = static_cast<T>(z); this->w = static_cast<T>(w);
     }
 
+    __host__ __device__ inline void Clamp(const float min, const float max) noexcept {
+        this->x = ::Clamp(this->x, min, max);
+        this->y = ::Clamp(this->y, min, max);
+        this->z = ::Clamp(this->z, min, max);
+        this->w = ::Clamp(this->w, min, max);
+    }
 
     __host__ __device__ inline float GetLength3D() const noexcept { return sqrt(this->x * this->x + this->y * this->y + this->z * this->z); }
     __host__ __device__ inline float GetLength4D() const noexcept { return sqrt(this->x * this->x + this->y * this->y + this->z * this->z + this->w * this->w); }
@@ -438,6 +438,11 @@ struct Vec4 {
 
     static __host__ __device__ inline Vec4<T> Reflected3D(const Vec4<T>& inDirection, const Vec4<T>& normal) noexcept {
         return inDirection - 2 * Vec4<T>::DotProduct3D(inDirection, normal) * normal;
+    }
+    
+    static __host__ __device__ inline Vec4<T> Clamped(Vec4<T> v, const float min, const float max) {
+        v.Clamp(min, max);
+        return v;
     }
 }; // Vec4<T>
 
@@ -524,9 +529,9 @@ private:
     Array<T, D> m_pArray;
 
 public:
-    __host__ __device__ inline Image() = default;
+    Image() = default;
 
-    __host__ __device__ inline Image(const std::uint16_t width, const std::uint16_t height) noexcept
+    inline Image(const std::uint16_t width, const std::uint16_t height) noexcept
         : m_width(width),
         m_height(height),
         m_nPixels(static_cast<std::uint32_t>(width)* height),
@@ -547,7 +552,7 @@ public:
 
 }; // Image
 
-__host__ void SaveImage(const Image<Coloru8, Device::CPU>& image, const std::string& filename) noexcept {
+void SaveImage(const Image<Coloru8, Device::CPU>& image, const std::string& filename) noexcept {
     const std::string fullFilename = filename + ".pam";
 
     // Open
@@ -714,13 +719,11 @@ __device__ Colorf32 RayTrace(const Ray& ray,
     const GPU_ArrayView<Plane>& pPlanes,
     curandState_t* const randState) {
 
-    auto intersection = FindClosestIntersection(ray, pSpheres, pPlanes);
+    const auto intersection = FindClosestIntersection(ray, pSpheres, pPlanes);
 
     if constexpr (_N < MAX_REC) {
         if (intersection.t != FLT_MAX) {
             const Material& material = intersection.material;
-
-            //return material.diffuse;
             
             Ray newRay;
             newRay.origin = intersection.location + EPSILON * intersection.normal;
@@ -734,17 +737,12 @@ __device__ Colorf32 RayTrace(const Ray& ray,
             }
             
             const Colorf32 materialComp = RayTrace<_N + 1u>(newRay, pParams, pSpheres, pPlanes, randState);
-            Colorf32 finalColor   = material.emittance + material.diffuse * materialComp * 2 * 3.1415926f;
+            const Colorf32 finalColor = material.emittance + material.diffuse * materialComp * 2 * 3.1415926f;
 
-            finalColor.x = Clamp(finalColor.x, 0.f, 1.f);
-            finalColor.y = Clamp(finalColor.y, 0.f, 1.f);
-            finalColor.z = Clamp(finalColor.z, 0.f, 1.f);
-            finalColor.w = Clamp(finalColor.w, 0.f, 1.f);
-
-            return finalColor;
+            return Vec4f32::Clamped(finalColor, 0.f, 1.f);
         } else {
             // Sky Color
-            const float ratio = (threadIdx.y + blockIdx.y * blockDim.y) / float(pParams->height);
+            const float ratio = (threadIdx.y + blockIdx.y * blockDim.y) / (float)pParams->height;
 
             const auto skyLightBlue = Vec4f32(0.78f, 0.96f, 1.00f, 1.0f);
             const auto skyDarkBlue  = Vec4f32(0.01f, 0.84f, 0.93f, 1.0f);
