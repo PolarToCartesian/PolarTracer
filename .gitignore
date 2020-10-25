@@ -1,5 +1,6 @@
 PolarTracer
 *.png
+!samples/*.png
 build/*
 .vscode/
 *.exe
