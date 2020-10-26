@@ -594,6 +594,7 @@ struct Material {
     Colorf32 emittance = { 0.f, 0.f, 0.f, 1.f };
 
     float reflectance = 0.f;
+    float roughness   = 0.f;
 }; // Material
 
 struct Sphere {
@@ -732,14 +733,15 @@ __device__ Colorf32 RayTrace(const Ray& ray,
 
             if (material.reflectance > RandomFloat(randState)) {
                 // Compute Reflexion
-                newRay.direction = Vec4f32::Reflected3D(ray.direction, intersection.normal);
+                newRay.direction = material.roughness * Random3DUnitVector(randState) + (1 - material.roughness) * Vec4f32::Reflected3D(ray.direction, intersection.normal);
             } else { 
                 // Compute Diffuse
                 newRay.direction = Random3DUnitVector(randState);
             }
             
             const Colorf32 materialComp = RayTrace<_N + 1u>(newRay, pParams, pSpheres, pPlanes, randState);
-            const Colorf32 finalColor = material.emittance + material.diffuse * materialComp;
+            const float dotProduct    = Clamp(Vec4f32::DotProduct3D(newRay.direction, intersection.normal), 0.f, 1.f);
+            const Colorf32 finalColor = material.emittance + material.diffuse * Vec4f32(1, 1, 1, 1.f) * materialComp;
 
             return Vec4f32::Clamped(finalColor, 0.f, 1.f);
         } else {
@@ -849,10 +851,10 @@ int main(int argc, char** argv) {
 
     RenderParams renderParams;
 
-    renderParams.width = WIDTH;
+    renderParams.width  = WIDTH;
     renderParams.height = HEIGHT;
     renderParams.camera.position = Vec4f32(0.f, 0.f, -2.f, 0.f);
-    renderParams.camera.fov = 3.141592f / 4.f;
+    renderParams.camera.fov      = 3.141592f / 4.f;
 
    CPU_Array<Sphere> spheres(5);
    spheres[0].center = Vec4f32{ 0.0f, 0.0f, 2.f, 0.f };
@@ -860,61 +862,71 @@ int main(int argc, char** argv) {
    spheres[0].material.diffuse   = Colorf32{ 1.f, 0.f, 1.f, 1.f };
    spheres[0].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
    spheres[0].material.reflectance = 0.f;
+   spheres[0].material.roughness   = 0.f;
 
    spheres[1].center = Vec4f32{ 0.f, -.8f, 1.f, 0.0f };
    spheres[1].radius = 0.05f;
    spheres[1].material.diffuse   = Colorf32{ 1.f, 1.f, 1.f, 1.f };
    spheres[1].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
    spheres[1].material.reflectance = 0.f;
+   spheres[1].material.roughness   = 0.f;
 
    spheres[2].center = Vec4f32{ -0.75f, 0.0f, 1.5f, 0.f };
    spheres[2].radius = 0.25f;
    spheres[2].material.diffuse   = Colorf32{ 0.f, 1.f, 1.f, 1.f };
    spheres[2].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
-   spheres[2].material.reflectance = 1.f;
+   spheres[2].material.reflectance = 1.0f;
+   spheres[2].material.roughness   = 0.4f;
 
    spheres[3].center = Vec4f32{ 1.0f, 0.0f, 1.5f, 0.f };
    spheres[3].radius = 0.25f;
    spheres[3].material.diffuse   = Colorf32{ 1.f, 1.f, 0.f, 1.f };
    spheres[3].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
    spheres[3].material.reflectance = 0.f;
+   spheres[3].material.roughness   = 0.f;
 
    spheres[4].center = Vec4f32{0.4f, 0.0f, 0.8f, 0.f};
    spheres[4].radius = 0.15f;
    spheres[4].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
    spheres[4].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
-   spheres[4].material.reflectance = 1.f;
+   spheres[4].material.reflectance = 1.00f;
+   spheres[4].material.roughness   = 0.25f;
 
    CPU_Array<Plane> planes(5);
    planes[0].position = Vec4f32{ 0.f, 0.f, 2.f, 0.f };
-   planes[0].normal = Vec4f32{ 0.f, 0.f, -1.f, 0.f };
-   planes[0].material.diffuse = Colorf32{ 1.f, 1.f, 1.f, 1.f };
+   planes[0].normal   = Vec4f32{ 0.f, 0.f, -1.f, 0.f };
+   planes[0].material.diffuse   = Colorf32{ 1.f, 1.f, 1.f, 1.f };
    planes[0].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
    planes[0].material.reflectance = 0.f;
+   planes[0].material.roughness   = 0.f;
 
    planes[1].position = Vec4f32{ 1.25f, 0.f, 0.f, 0.f };
-   planes[1].normal = Vec4f32{ -1.f, 0.f, 0.f, 0.f };
+   planes[1].normal   = Vec4f32{ -1.f, 0.f, 0.f, 0.f };
    planes[1].material.diffuse = Colorf32{ 1.f, 0.f, 0.f, 1.f };
    planes[1].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
    planes[1].material.reflectance = 0.f;
+   planes[1].material.roughness   = 0.f;
 
    planes[2].position = Vec4f32{ -1.25f, 0.f, 0.f, 0.f };
-   planes[2].normal = Vec4f32{ 1.f, 0.f, 0.f, 0.f };
-   planes[2].material.diffuse = Colorf32{ 0.f, 1.f, 0.f, 1.f };
-   planes[2].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
+   planes[2].normal   = Vec4f32{ 1.f, 0.f, 0.f, 0.f };
+   planes[2].material.diffuse     = Colorf32{ 0.f, 1.f, 0.f, 1.f };
+   planes[2].material.emittance   = Colorf32{ 0.f, 0.f, 0.f, 1.f };
    planes[2].material.reflectance = 0.f;
+   planes[2].material.roughness   = 0.f;
 
    planes[3].position = Vec4f32{ 0.f, -1.0f, 0.f, 0.f };
-   planes[3].normal = Vec4f32{ 0.f, 1.f, 0.f, 0.f };
-   planes[3].material.diffuse = Colorf32{ 0.f, 0.f, 1.f, 1.f };
-   planes[3].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
+   planes[3].normal   = Vec4f32{ 0.f, 1.f, 0.f, 0.f };
+   planes[3].material.diffuse     = Colorf32{ 0.f, 0.f, 1.f, 1.f };
+   planes[3].material.emittance   = Colorf32{ 0.f, 0.f, 0.f, 1.f };
    planes[3].material.reflectance = 0.f;
+   planes[3].material.roughness   = 0.f;
 
    planes[4].position = Vec4f32{ 0.f, 1.f, 0.f, 0.f };
-   planes[4].normal = Vec4f32{ 0.f, -1.f, 0.f, 0.f };
-   planes[4].material.diffuse = Colorf32{ 1.f, 1.f, 1.f, 1.f };
-   planes[4].material.emittance = Colorf32{ 1.f, 1.f, 1.f, 1.f };
+   planes[4].normal   = Vec4f32{ 0.f, -1.f, 0.f, 0.f };
+   planes[4].material.diffuse     = Colorf32{ 1.f, 1.f, 1.f, 1.f };
+   planes[4].material.emittance   = Colorf32{ 1.f, 1.f, 1.f, 1.f };
    planes[4].material.reflectance = 0.f;
+   planes[4].material.roughness   = 0.f;
 
     PolarTracer pt(renderParams, spheres, planes);
 
