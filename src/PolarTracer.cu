@@ -770,7 +770,7 @@ __device__ Colorf32 RayTrace(const Ray& ray,
                 // Compute Transparency
                 const bool outside = Vec4f32::DotProduct3D(ray.direction, intersection.normal) < 0;
 
-                newRay.direction = Refract(ray.direction, intersection.normal, material.index_of_refraction);
+                newRay.direction = Vec4f32::Normalized3D(Refract(ray.direction, intersection.normal, material.index_of_refraction));
                 newRay.origin    = intersection.location + (outside ? -1 : 1) * EPSILON * intersection.normal;
             } else {
                 // Compute Diffuse
