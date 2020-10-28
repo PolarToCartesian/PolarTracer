@@ -15,7 +15,7 @@
 
 #define EPSILON (float)0.0001f
 #define MAX_REC (10)
-#define SPP     (100)
+#define SPP     (10000)
 
 __device__ float RandomFloat(curandState_t* const randState) noexcept {
     return curand_uniform(randState);
@@ -716,7 +716,7 @@ __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixe
     const RenderParams& renderParams = *pRanderParams;
 
     Ray ray;
-    ray.origin = Vec4f32(0.f, 0.f, 0.f, 0.f);//TODO:: camera position
+    ray.origin = renderParams.camera.position;
     ray.direction = Vec4f32::Normalized3D(Vec4f32(
         (2.0f  * ((pixelX + RandomFloat(randState)) / static_cast<float>(renderParams.width))  - 1.0f) * tan(renderParams.camera.fov) * static_cast<float>(renderParams.width) / static_cast<float>(renderParams.height),
         (-2.0f * ((pixelY + RandomFloat(randState)) / static_cast<float>(renderParams.height)) + 1.0f) * tan(renderParams.camera.fov),
@@ -887,7 +887,7 @@ int main(int argc, char** argv) {
 
     renderParams.width  = WIDTH;
     renderParams.height = HEIGHT;
-    renderParams.camera.position = Vec4f32(0.f, 0.f, -2.f, 0.f);
+    renderParams.camera.position = Vec4f32(0.f, .5f, -2.f, 0.f);
     renderParams.camera.fov      = 3.141592f / 4.f;
 
     CPU_Array<Sphere> spheres(2);
@@ -943,7 +943,7 @@ int main(int argc, char** argv) {
     planes[3].normal   = Vec4f32{1.f, 0.f, 0.f, 0.f};
     planes[3].material.roughness = 0.25f;
 
-    planes[4].position = Vec4f32{ 0.f, 0.f, -1.f, 0.f};
+    planes[4].position = Vec4f32{ 0.f, 0.f, renderParams.camera.position.z - 1.f, 0.f};
     planes[4].normal   = Vec4f32{ 0.f, 0.f, 1.f, 0.f};
     planes[4].material.diffuse   = Colorf32{.75f, .75f, .75f, 1.f};
     planes[4].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
