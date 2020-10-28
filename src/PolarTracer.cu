@@ -15,7 +15,7 @@
 
 #define EPSILON (float)0.0001f
 #define MAX_REC (10)
-#define SPP     (1000)
+#define SPP     (100)
 
 __device__ float RandomFloat(curandState_t* const randState) noexcept {
     return curand_uniform(randState);
@@ -819,9 +819,8 @@ __global__ void RayTracingDispatcher(const GPU_Ptr<Coloru8> pSurface,
     Colorf32 pixelColor{};
     for (size_t i = 0; i < SPP; i++)
         pixelColor += RayTrace<0>(cameraRay, pParams, pSpheres, pPlanes, &randState);
-    pixelColor /= (float)SPP;
-    pixelColor.Clamp(0.f, 1.f);
-    pixelColor *= 255.f;
+    pixelColor *= 255.f / static_cast<float>(SPP);
+    pixelColor.Clamp(0.f, 255.f);
 
     // Save the result to the buffer
     *(pSurface + index) = Coloru8(pixelColor.x, pixelColor.y, pixelColor.z, pixelColor.w);
@@ -955,7 +954,17 @@ int main(int argc, char** argv) {
     pt.RayTraceScene(image);
     const auto endTime   = std::chrono::high_resolution_clock::now();
 
-    std::cout << "Took " << (std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() / 1000.f) << "s\n";
+    const double duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() / 1000.f;
+
+    std::cout << std::fixed << '\n';
+    std::cout << "Took " << duration << "s to render a " << WIDTH << " by " << HEIGHT << " image at " << SPP << " SPP with a maximum recursion depth of " << MAX_REC << ".\n";
+    std::cout << "Big numbers:\n";
+    std::cout << "-->" << (unsigned int)(WIDTH * HEIGHT) << " pixels.\n";
+    std::cout << "-->" << (unsigned int)(WIDTH * HEIGHT * SPP) << " samples.\n";
+    std::cout << "-->" << (unsigned int)(WIDTH * HEIGHT * SPP * MAX_REC) << " photons.\n";
+    std::cout << "Timings:\n";
+    std::cout << "-->" << (unsigned int)((WIDTH * HEIGHT * SPP) / duration) << " samples per sec.\n";
+    std::cout << "-->" << (unsigned int)((WIDTH * HEIGHT * SPP * MAX_REC) / duration) << " photon paths per sec.\n";
 
     SaveImage(image, "frame");
 }
