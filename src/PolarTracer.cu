@@ -608,9 +608,14 @@ struct RenderParams {
     Camera camera;
 };
 
+struct Intersection;
+
 struct Ray {
     Vec4f32 origin;
     Vec4f32 direction;
+
+    template <typename _T_OBJ>
+    __device__ Intersection Intersects(const _T_OBJ& obj) const noexcept;
 }; // Ray
 
 struct Material {
@@ -644,29 +649,15 @@ struct Intersection {
     float            t; // distance from the ray's origin to intersection point
     Vec4f32  location;  // intersection location
     Vec4f32  normal;    // normal at intersection point
-    Material material;  // the material that the intersected object is made of      ::      
+    Material material;  // the material that the intersected object is made of
 }; // Intersection
 
-__device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const GPU_Ptr<RenderParams>& pRanderParams, curandState_t* const randState) noexcept {
-    const RenderParams& renderParams = *pRanderParams;
-
-    Ray ray;
-    ray.origin = Vec4f32(0.f, 0.f, 0.f, 0.f);//TODO:: camera position
-    ray.direction = Vec4f32::Normalized3D(Vec4f32(
-        (2.0f  * ((pixelX + RandomFloat(randState)) / static_cast<float>(renderParams.width))  - 1.0f) * tan(renderParams.camera.fov) * static_cast<float>(renderParams.width) / static_cast<float>(renderParams.height),
-        (-2.0f * ((pixelY + RandomFloat(randState)) / static_cast<float>(renderParams.height)) + 1.0f) * tan(renderParams.camera.fov),
-        1.0f,
-        0.f));
-
-    return ray;
-}
-
-__device__ Intersection
-RayIntersects(const Ray& ray, const Sphere& sphere) noexcept {
+template <>
+__device__ Intersection Ray::Intersects(const Sphere& sphere) const noexcept {
     const float radius2 = sphere.radius * sphere.radius;
 
-    const Vec4f32 L = sphere.center - ray.origin;
-    const float   tca = Vec4f32::DotProduct3D(L, ray.direction);
+    const Vec4f32 L = sphere.center - this->origin;
+    const float   tca = Vec4f32::DotProduct3D(L, this->direction);
     const float   d2 = Vec4f32::DotProduct3D(L, L) - tca * tca;
 
     if (d2 > radius2)
@@ -690,28 +681,28 @@ RayIntersects(const Ray& ray, const Sphere& sphere) noexcept {
     }
 
     Intersection intersection;
-    intersection.inRay = ray;
-    intersection.t = t0;
-    intersection.location = ray.origin + t0 * ray.direction;
-    intersection.normal = Vec4f32::Normalized3D(intersection.location - sphere.center);
+    intersection.inRay    = *this;
+    intersection.t        = t0;
+    intersection.location = this->origin + t0 * this->direction;
+    intersection.normal   = Vec4f32::Normalized3D(intersection.location - sphere.center);
     intersection.material = sphere.material;
 
     return intersection;
 }
 
-__device__ Intersection
-RayIntersects(const Ray& ray, const Plane& plane) noexcept {
-    const float denom = Vec4f32::DotProduct3D(plane.normal, ray.direction);
+template <>
+__device__ Intersection Ray::Intersects(const Plane& plane) const noexcept {
+    const float denom = Vec4f32::DotProduct3D(plane.normal, this->direction);
     if (abs(denom) >= EPSILON) {
-        const Vec4f32 v = plane.position - ray.origin;
+        const Vec4f32 v = plane.position - this->origin;
         const float t = Vec4f32::DotProduct3D(v, plane.normal) / denom;
 
         if (t >= 0) {
             Intersection intersection;
-            intersection.inRay = ray;
-            intersection.t = t;
-            intersection.location = ray.origin + t * ray.direction;
-            intersection.normal = plane.normal;
+            intersection.inRay    = *this;
+            intersection.t        = t;
+            intersection.location = this->origin + t * this->direction;
+            intersection.normal   = plane.normal;
             intersection.material = plane.material;
 
             return intersection;
@@ -721,37 +712,51 @@ RayIntersects(const Ray& ray, const Plane& plane) noexcept {
     return Intersection{ {}, FLT_MAX };
 }
 
+__device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const GPU_Ptr<RenderParams>& pRanderParams, curandState_t* const randState) noexcept {
+    const RenderParams& renderParams = *pRanderParams;
+
+    Ray ray;
+    ray.origin = Vec4f32(0.f, 0.f, 0.f, 0.f);//TODO:: camera position
+    ray.direction = Vec4f32::Normalized3D(Vec4f32(
+        (2.0f  * ((pixelX + RandomFloat(randState)) / static_cast<float>(renderParams.width))  - 1.0f) * tan(renderParams.camera.fov) * static_cast<float>(renderParams.width) / static_cast<float>(renderParams.height),
+        (-2.0f * ((pixelY + RandomFloat(randState)) / static_cast<float>(renderParams.height)) + 1.0f) * tan(renderParams.camera.fov),
+        1.0f,
+        0.f));
+
+    return ray;
+}
+
+template <typename T_OBJ>
+__device__ inline void FindClosestIntersection(const Ray& ray,
+                                               Intersection& closest, // in/out
+                                               const GPU_ArrayView<T_OBJ>& objArrayView) noexcept {
+    for (size_t i = 0; i < objArrayView.GetCount(); i++) {
+        const Intersection current = ray.Intersects(objArrayView[i]);
+
+        if (current.t < closest.t)
+            closest = current;
+    }
+}
+
 __device__ Intersection
 FindClosestIntersection(const Ray& ray,
-    const GPU_ArrayView<Sphere>& pSpheres,
-    const GPU_ArrayView<Plane>& pPlanes) noexcept {
+                        const GPU_ArrayView<Sphere>& pSpheres,
+                        const GPU_ArrayView<Plane>& pPlanes) noexcept {
     Intersection closest;
     closest.t = FLT_MAX;
-
-    for (size_t i = 0; i < pSpheres.GetCount(); i++) {
-        const Intersection current = RayIntersects(ray, pSpheres[i]);
-
-        if (current.t < closest.t)
-            closest = current;
-    }
-
-    for (size_t i = 0; i < pPlanes.GetCount(); i++) {
-        const Intersection current = RayIntersects(ray, pPlanes[i]);
-
-        if (current.t < closest.t)
-            closest = current;
-    }
+    
+    FindClosestIntersection(ray, closest, pSpheres);
+    FindClosestIntersection(ray, closest, pPlanes);
 
     return closest;
 }
 
 template <size_t _N>
 __device__ Colorf32 RayTrace(const Ray& ray,
-    const GPU_Ptr<RenderParams>& pParams,
-    const GPU_ArrayView<Sphere>& pSpheres,
-    const GPU_ArrayView<Plane>& pPlanes,
-    curandState_t* const randState) {
-
+                             const GPU_Ptr<RenderParams>& pParams,
+                             const GPU_ArrayView<Sphere>& pSpheres,
+                             const GPU_ArrayView<Plane>& pPlanes,
+                             curandState_t* const randState) {
     const auto intersection = FindClosestIntersection(ray, pSpheres, pPlanes);
 
     if constexpr (_N < MAX_REC) {
@@ -790,9 +795,9 @@ __device__ Colorf32 RayTrace(const Ray& ray,
 
 // Can't pass arguments via const& because these variables exist on the host and not on the device
 __global__ void RayTracingDispatcher(const GPU_Ptr<Coloru8> pSurface,
-    const GPU_Ptr<RenderParams> pParams,
-    const GPU_ArrayView<Sphere> pSpheres,
-    const GPU_ArrayView<Plane>  pPlanes) {
+                                     const GPU_Ptr<RenderParams> pParams,
+                                     const GPU_ArrayView<Sphere> pSpheres,
+                                     const GPU_ArrayView<Plane>  pPlanes) {
 
     curandState_t randState;
 
