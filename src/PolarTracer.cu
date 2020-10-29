@@ -1,3 +1,4 @@
+#include <cfloat>
 #include <chrono>
 #include <limits>
 #include <ostream>
@@ -488,7 +489,7 @@ __host__ __device__ inline Vec4<T> Refract(const Vec4<T>& in, Vec4<T> n, const f
     float eta = etai / etat; 
     float k = 1 - eta * eta * (1 - cosi * cosi); 
 
-    return (k < 0) ? Vec4f32(0, 0, 0, 0) : (eta * in + (eta * cosi - sqrtf(k)) * n); 
+    return (k < 0) ? Vec4<T>(0, 0, 0, 0) : (eta * in + (eta * cosi - sqrtf(k)) * n); 
 }
 
 template <typename T, typename _U>
