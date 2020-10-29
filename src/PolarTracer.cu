@@ -13,9 +13,14 @@
 #include <curand.h>
 #include <curand_kernel.h>
 
+//TODO:
+// + Check that the intersection normals always point in the correct direction
+// + Fresnel
+// + Obj Mesh loading
+
 #define EPSILON (float)0.0001f
 #define MAX_REC (10)
-#define SPP     (10000)
+#define SPP     (10)
 
 __device__ float RandomFloat(curandState_t* const randState) noexcept {
     return curand_uniform(randState);
@@ -449,6 +454,15 @@ struct Vec4 {
         return inDirection - 2 * Vec4<T>::DotProduct3D(inDirection, normal) * normal;
     }
 
+    static __host__ __device__ inline Vec4<T> CrossProduct3D(const Vec4<T>& a, const Vec4<T>& b) noexcept {
+        return Vec4<T>{
+            a.y*b.z-a.z*b.y,
+            a.z*b.x-a.x*b.z,
+            a.x*b.y-a.y*b.x,
+            0
+        };
+    }
+
     static __host__ __device__ inline Vec4<T> Clamped(Vec4<T> v, const float min, const float max) noexcept {
         v.Clamp(min, max);
         return v;
@@ -630,19 +644,25 @@ struct Material {
     float index_of_refraction = 1.f;
 }; // Material
 
-struct Sphere {
+struct ObjectBase {
+    Material material;
+};
+
+struct Sphere : ObjectBase {
     Vec4f32 center;
     float   radius;
-
-    Material material;
 }; // Sphere
 
-struct Plane {
+struct Plane : ObjectBase {
     Vec4f32 position; // Any Point On The Plane
     Vec4f32 normal;   // Normal To The Surface
-
-    Material material;
 }; // Plane
+
+struct Triangle : ObjectBase {
+    Vec4f32 p0; // Position of the 1st vertex
+    Vec4f32 p1; // Position of the 2nd vertex
+    Vec4f32 p2; // Position of the 3rd vertex
+};
 
 struct Intersection {
     Ray      inRay;     // incoming ray
@@ -650,6 +670,10 @@ struct Intersection {
     Vec4f32  location;  // intersection location
     Vec4f32  normal;    // normal at intersection point
     Material material;  // the material that the intersected object is made of
+
+    __device__ __host__ static inline Intersection MakeNullIntersection(const Ray& ray) noexcept {
+        return Intersection{ray, FLT_MAX};
+    }
 }; // Intersection
 
 template <>
@@ -661,7 +685,7 @@ __device__ Intersection Ray::Intersects(const Sphere& sphere) const noexcept {
     const float   d2 = Vec4f32::DotProduct3D(L, L) - tca * tca;
 
     if (d2 > radius2)
-        return Intersection{ {}, FLT_MAX };
+        return Intersection::MakeNullIntersection(*this);
 
     const float thc = sqrt(radius2 - d2);
     float t0 = tca - thc;
@@ -677,7 +701,7 @@ __device__ Intersection Ray::Intersects(const Sphere& sphere) const noexcept {
         t0 = t1;
 
         if (t0 < 0)
-            return Intersection{ {}, FLT_MAX };
+            return Intersection::MakeNullIntersection(*this);
     }
 
     Intersection intersection;
@@ -709,7 +733,66 @@ __device__ Intersection Ray::Intersects(const Plane& plane) const noexcept {
         }
     }
 
-    return Intersection{ {}, FLT_MAX };
+    return Intersection::MakeNullIntersection(*this);
+}
+
+// https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm#:~:text=The%20M%C3%B6ller%E2%80%93Trumbore%20ray%2Dtriangle,the%20plane%20containing%20the%20triangle.
+template <>
+__device__ Intersection Ray::Intersects(const Triangle& triangle) const noexcept {
+    // compute plane's normal
+    Vec4f32 v0v1 = triangle.p1 - triangle.p0; 
+    Vec4f32 v0v2 = triangle.p2 - triangle.p0; 
+    // no need to normalize
+    Vec4f32 N = Vec4f32::CrossProduct3D(v0v1, v0v2); // N 
+    float area2 = N.GetLength3D(); 
+ 
+    // Step 1: finding P
+ 
+    // check if ray and plane are parallel ?
+    float NdotRayDirection = Vec4f32::DotProduct3D(N, this->direction); 
+    if (fabs(NdotRayDirection) < EPSILON) // almost 0 
+        return Intersection::MakeNullIntersection(*this); // they are parallel so they don't intersect ! 
+ 
+    // compute d parameter using equation 2
+    float d = Vec4f32::DotProduct3D(N, triangle.p0); 
+ 
+    // compute t (equation 3)
+    float t = (Vec4f32::DotProduct3D(N, this->origin) + d) / NdotRayDirection; 
+    // check if the triangle is in behind the ray
+    if (t < 0) return Intersection::MakeNullIntersection(*this); // the triangle is behind 
+ 
+    // compute the intersection point using equation 1
+    Vec4f32 P = this->origin + t * this->direction; 
+ 
+    // Step 2: inside-outside test
+    Vec4f32 C; // vector perpendicular to triangle's plane 
+ 
+    // edge 0
+    Vec4f32 edge0 = triangle.p1 - triangle.p0; 
+    Vec4f32 vp0 = P - triangle.p0; 
+    C = Vec4f32::DotProduct3D(edge0, vp0);
+    if (Vec4f32::DotProduct3D(N, C) < 0) return Intersection::MakeNullIntersection(*this); // P is on the right side 
+ 
+    // edge 1
+    Vec4f32 edge1 = triangle.p2 - triangle.p1; 
+    Vec4f32 vp1 = P - triangle.p1; 
+    C = Vec4f32::DotProduct3D(edge1, vp1); 
+    if (Vec4f32::DotProduct3D(N, C) < 0) return Intersection::MakeNullIntersection(*this);; // P is on the right side 
+ 
+    // edge 2
+    Vec4f32 edge2 = triangle.p0 - triangle.p2; 
+    Vec4f32 vp2 = P - triangle.p2; 
+    C = Vec4f32::DotProduct3D(edge2, vp2); 
+    if (Vec4f32::DotProduct3D(N, C) < 0) return Intersection::MakeNullIntersection(*this);; // P is on the right side; 
+ 
+    Intersection intersection;
+    intersection.inRay    = *this;
+    intersection.t        = t;
+    intersection.location = this->origin + t * this->direction;
+    intersection.normal   = Vec4f32{};//todo
+    intersection.material = triangle.material;
+
+    return intersection;
 }
 
 __device__ inline Ray GenerateCameraRay(const size_t& pixelX, const size_t& pixelY, const GPU_Ptr<RenderParams>& pRanderParams, curandState_t* const randState) noexcept {
@@ -738,26 +821,46 @@ __device__ inline void FindClosestIntersection(const Ray& ray,
     }
 }
 
+template <template<typename _IDC_T, Device _IDC_D> typename Container, Device D>
+struct Primitives {
+    Container<Sphere, D>   spheres;
+    Container<Plane, D>    planes;
+    Container<Triangle, D> triangles;
+
+    Primitives() = default;
+
+    template <Device D_2>
+    inline Primitives(const Primitives<Container, D_2>& o) noexcept {
+        this->spheres   = o.spheres;
+        this->planes    = o.planes;
+        this->triangles = o.triangles;
+    }
+
+    template <template<typename, Device> typename C_2, Device D_2>
+    inline Primitives(const Primitives<C_2, D_2>& o) noexcept {
+        this->spheres   = o.spheres;
+        this->planes    = o.planes;
+        this->triangles = o.triangles;
+    }
+}; // Primitives
+
 __device__ Intersection
-FindClosestIntersection(const Ray& ray,
-                        const GPU_ArrayView<Sphere>& pSpheres,
-                        const GPU_ArrayView<Plane>& pPlanes) noexcept {
+FindClosestIntersection(const Ray& ray, const Primitives<ArrayView, Device::GPU>& primitives) noexcept {
     Intersection closest;
     closest.t = FLT_MAX;
     
-    FindClosestIntersection(ray, closest, pSpheres);
-    FindClosestIntersection(ray, closest, pPlanes);
+    FindClosestIntersection(ray, closest, primitives.spheres);
+    FindClosestIntersection(ray, closest, primitives.planes);
+    FindClosestIntersection(ray, closest, primitives.triangles);
 
     return closest;
 }
 
 template <size_t _N>
 __device__ Colorf32 RayTrace(const Ray& ray,
-                             const GPU_Ptr<RenderParams>& pParams,
-                             const GPU_ArrayView<Sphere>& pSpheres,
-                             const GPU_ArrayView<Plane>& pPlanes,
+                             const Primitives<ArrayView, Device::GPU>& primitives,
                              curandState_t* const randState) {
-    const auto intersection = FindClosestIntersection(ray, pSpheres, pPlanes);
+    const auto intersection = FindClosestIntersection(ray, primitives);
 
     if constexpr (_N < MAX_REC) {
         if (intersection.t != FLT_MAX) {
@@ -782,7 +885,7 @@ __device__ Colorf32 RayTrace(const Ray& ray,
                 newRay.direction = Random3DUnitVector(randState);
             }
             
-            const Colorf32 materialComp = RayTrace<_N + 1u>(newRay, pParams, pSpheres, pPlanes, randState);
+            const Colorf32 materialComp = RayTrace<_N + 1u>(newRay, primitives, randState);
             const Colorf32 finalColor   = material.emittance + material.diffuse * materialComp;
 
             return finalColor;
@@ -796,8 +899,7 @@ __device__ Colorf32 RayTrace(const Ray& ray,
 // Can't pass arguments via const& because these variables exist on the host and not on the device
 __global__ void RayTracingDispatcher(const GPU_Ptr<Coloru8> pSurface,
                                      const GPU_Ptr<RenderParams> pParams,
-                                     const GPU_ArrayView<Sphere> pSpheres,
-                                     const GPU_ArrayView<Plane>  pPlanes) {
+                                     const Primitives<ArrayView, Device::GPU> primitives) {
 
     curandState_t randState;
 
@@ -818,7 +920,8 @@ __global__ void RayTracingDispatcher(const GPU_Ptr<Coloru8> pSurface,
     // the current pixel's color (represented with floating point components)
     Colorf32 pixelColor{};
     for (size_t i = 0; i < SPP; i++)
-        pixelColor += RayTrace<0>(cameraRay, pParams, pSpheres, pPlanes, &randState);
+        pixelColor += RayTrace<0>(cameraRay, primitives, &randState);
+    
     pixelColor *= 255.f / static_cast<float>(SPP);
     pixelColor.Clamp(0.f, 255.f);
 
@@ -835,18 +938,17 @@ private:
     struct {
         Image<Coloru8, Device::GPU> m_frameBuffer;
         GPU_UniquePtr<RenderParams> m_pRenderParams;
-        GPU_Array<Sphere>     m_spheres;
-        GPU_Array<Plane>      m_planes;
+
+        Primitives<Array, Device::GPU> m_primitives;
     } device;
 
 public:
-    PolarTracer(const RenderParams& renderParams, const CPU_Array<Sphere>& spheres, const CPU_Array<Plane>& planes)
+    PolarTracer(const RenderParams& renderParams, const Primitives<Array, Device::CPU>& primitives)
         : host{ renderParams }
     {
-        this->device.m_frameBuffer = Image<Coloru8, Device::GPU>(renderParams.width, renderParams.height);
+        this->device.m_frameBuffer   = Image<Coloru8, Device::GPU>(renderParams.width, renderParams.height);
         this->device.m_pRenderParams = AllocateSingle<RenderParams, Device::GPU>();
-        this->device.m_spheres = GPU_Array<Sphere>(spheres);
-        this->device.m_planes = GPU_Array<Plane>(planes);
+        this->device.m_primitives    = primitives;
 
         const auto src = CPU_Ptr<RenderParams>(&this->host.m_renderParams);
         CopySingle(this->device.m_pRenderParams, src);
@@ -859,15 +961,14 @@ public:
 
         // Allocate 1 thread per pixel of coordinates (X,Y). Use as many blocks in the grid as needed
         // The RayTrace function will use the thread's index (both in the grid and in a block) to determine the pixel it will trace rays through
-        const dim3 dimBlock = dim3(16, 16); // 32 warps of 32 threads per block (=1024 threads in total which is the hardware limit)
+        const dim3 dimBlock = dim3(16, 16); // Was 32x32: 32 warps of 32 threads per block (=1024 threads in total which is the hardware limit)
         const dim3 dimGrid = dim3(std::ceil(this->host.m_renderParams.width / static_cast<float>(dimBlock.x)),
             std::ceil(this->host.m_renderParams.height / static_cast<float>(dimBlock.y)));
 
         // trace rays through each pixel
         RayTracingDispatcher<<<dimGrid, dimBlock>>>(this->device.m_frameBuffer.GetPtr(),
             this->device.m_pRenderParams,
-            this->device.m_spheres,
-            this->device.m_planes);
+            this->device.m_primitives);
 
         // wait for the job to finish
         printf("%s\n", cudaGetErrorString(cudaDeviceSynchronize()));
@@ -890,65 +991,82 @@ int main(int argc, char** argv) {
     renderParams.camera.position = Vec4f32(0.f, .5f, -2.f, 0.f);
     renderParams.camera.fov      = 3.141592f / 4.f;
 
-    CPU_Array<Sphere> spheres(2);
-    CPU_Array<Plane>  planes(5);
-    for (size_t i = 0; i < spheres.GetCount(); ++i) {
-        auto& o = spheres[i];
+    Primitives<Array, Device::CPU> primitives;
+    primitives.spheres = CPU_Array<Sphere>(2);
+    primitives.planes  = CPU_Array<Plane>(5);
+    primitives.triangles = CPU_Array<Triangle>(1);
+
+    for (size_t i = 0; i < primitives.spheres.GetCount(); ++i) {
+        auto& o = primitives.spheres[i];
         o.material.reflectance = 0.f;
         o.material.roughness = 1.0f;
         o.material.transparency = 0.f;
         o.material.index_of_refraction = 1.0f;
     }
 
-    for (size_t i = 0; i < planes.GetCount(); ++i) {
-        auto& o = planes[i];
+    for (size_t i = 0; i < primitives.planes.GetCount(); ++i) {
+        auto& o = primitives.planes[i];
         o.material.reflectance = 0.f;
         o.material.roughness = 1.0f;
         o.material.transparency = 0.f;
         o.material.index_of_refraction = 1.0f;
     }
 
-    spheres[0].center = Vec4f32{ 0.0f, 1.5f, 0.5f, 0.f };
-    spheres[0].radius = 0.5f;
-    spheres[0].material.diffuse   = Colorf32{ 1.f, 1.f, 1.f, 1.f };
+    for (size_t i = 0; i < primitives.triangles.GetCount(); ++i) {
+        auto& o = primitives.triangles[i];
+        o.material.reflectance = 0.f;
+        o.material.roughness = 1.0f;
+        o.material.transparency = 0.f;
+        o.material.index_of_refraction = 1.0f;
+    }
+
+    primitives.spheres[0].center = Vec4f32{ 0.0f, 1.5f, 0.5f, 0.f };
+    primitives.spheres[0].radius = 0.5f;
+    primitives.spheres[0].material.diffuse   = Colorf32{ 1.f, 1.f, 1.f, 1.f };
     const float li = 5.f;
-    spheres[0].material.emittance = Colorf32{ li, li, li, 1.f };
+    primitives.spheres[0].material.emittance = Colorf32{ li, li, li, 1.f };
 
-    spheres[1].center = Vec4f32{ 0.0f, 0.3f, 1.0f, 0.f };
-    spheres[1].radius = 0.5f;
-    spheres[1].material.diffuse   = Colorf32{ 1.f, 0.6f, 0.3f, 1.f };
-    spheres[1].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
-    spheres[1].material.reflectance = 0.1f;
+    primitives.spheres[1].center = Vec4f32{ 0.0f, 0.3f, 1.0f, 0.f };
+    primitives.spheres[1].radius = 0.5f;
+    primitives.spheres[1].material.diffuse   = Colorf32{ 1.f, 0.6f, 0.3f, 1.f };
+    primitives.spheres[1].material.emittance = Colorf32{ 0.f, 0.f, 0.f, 1.f };
+    primitives.spheres[1].material.reflectance = 0.1f;
 
-    planes[0].position = Vec4f32{ 0.f, -.25f, 0.f, 0.f};
-    planes[0].normal   = Vec4f32{ 0.f, 1.f, 0.f, 0.f};
-    planes[0].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
-    planes[0].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
+    primitives.planes[0].position = Vec4f32{ 0.f, -.25f, 0.f, 0.f};
+    primitives.planes[0].normal   = Vec4f32{ 0.f, 1.f, 0.f, 0.f};
+    primitives.planes[0].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
+    primitives.planes[0].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
 
-    planes[1].position = Vec4f32{ 0.f, 0.f, 1.f, 0.f};
-    planes[1].normal   = Vec4f32{ 0.f, 0.f, -1.f, 0.f};
-    planes[1].material.diffuse   = Colorf32{0.75f, 0.75f, 0.75f, 1.f};
-    planes[1].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
-    planes[1].material.reflectance = 1.f;
-    planes[1].material.roughness   = 0.f;
+    primitives.planes[1].position = Vec4f32{ 0.f, 0.f, 1.f, 0.f};
+    primitives.planes[1].normal   = Vec4f32{ 0.f, 0.f, -1.f, 0.f};
+    primitives.planes[1].material.diffuse   = Colorf32{0.75f, 0.75f, 0.75f, 1.f};
+    primitives.planes[1].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
+    primitives.planes[1].material.reflectance = 1.f;
+    primitives.planes[1].material.roughness   = 0.f;
 
-    planes[2] = planes[1];
-    planes[2].position = Vec4f32{1.f, 0.f, 0.f, 0.f};
-    planes[2].normal   = Vec4f32{-1.f, 0.f, 0.f, 0.f};
-    planes[2].material.roughness   = 0.f;
-    planes[2].material.reflectance = 0.8f;
+    primitives.planes[2] = primitives.planes[1];
+    primitives.planes[2].position = Vec4f32{1.f, 0.f, 0.f, 0.f};
+    primitives.planes[2].normal   = Vec4f32{-1.f, 0.f, 0.f, 0.f};
+    primitives.planes[2].material.roughness   = 0.f;
+    primitives.planes[2].material.reflectance = 0.8f;
 
-    planes[3] = planes[1];
-    planes[3].position = Vec4f32{-1.f, 0.f, 0.f, 0.f};
-    planes[3].normal   = Vec4f32{1.f, 0.f, 0.f, 0.f};
-    planes[3].material.roughness = 0.25f;
+    primitives.planes[3] = primitives.planes[1];
+    primitives.planes[3].position = Vec4f32{-1.f, 0.f, 0.f, 0.f};
+    primitives.planes[3].normal   = Vec4f32{1.f, 0.f, 0.f, 0.f};
+    primitives.planes[3].material.roughness = 0.25f;
 
-    planes[4].position = Vec4f32{ 0.f, 0.f, renderParams.camera.position.z - 1.f, 0.f};
-    planes[4].normal   = Vec4f32{ 0.f, 0.f, 1.f, 0.f};
-    planes[4].material.diffuse   = Colorf32{.75f, .75f, .75f, 1.f};
-    planes[4].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
+    primitives.planes[4].position = Vec4f32{ 0.f, 0.f, renderParams.camera.position.z - 1.f, 0.f};
+    primitives.planes[4].normal   = Vec4f32{ 0.f, 0.f, 1.f, 0.f};
+    primitives.planes[4].material.diffuse   = Colorf32{.75f, .75f, .75f, 1.f};
+    primitives.planes[4].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
 
-    PolarTracer pt(renderParams, spheres, planes);
+    primitives.triangles[0].p2 = Vec4f32{ -0.5f, 1.f, 0.5f, 0.f};
+    primitives.triangles[0].p1 = Vec4f32{ 0.5f, 1.f, 0.5f, 0.f};
+    primitives.triangles[0].p0 = Vec4f32{ -0.5f, 0.f, 0.5f, 0.f};
+    primitives.triangles[0].material.diffuse   = Colorf32{1.f, 0.f, 0.f, 1.f};
+    primitives.triangles[0].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
+
+    PolarTracer pt(renderParams, primitives);
 
     const auto startTime = std::chrono::high_resolution_clock::now();
     pt.RayTraceScene(image);
