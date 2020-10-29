@@ -32,7 +32,7 @@ __host__ __device__ inline T Clamp(const T& x, const T& min, const T& max) noexc
 }
 
 template <typename T>
-__host__ __device__ inline T Swap(T& a, T& b) noexcept {
+__host__ __device__ inline void Swap(T& a, T& b) noexcept {
     const T tmp = a;
     a = b;
     b = tmp;
@@ -103,6 +103,8 @@ inline Pointer<T, D> AllocateSize(const size_t size) noexcept {
         cudaMalloc(reinterpret_cast<void**>(&p), size);
         return GPU_Ptr<T>(p);
     }
+
+    return Pointer<T, D>{nullptr}; // done to suppress a warning
 }
 
 template <typename T, Device D>
@@ -158,7 +160,7 @@ inline void CopySize(const _PTR_DST<T_DST, D_DST>& dst,
 }
 
 template <template<typename, Device> typename _PTR_DST, typename T_DST, Device D_DST,
-         template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
+          template<typename, Device> typename _PTR_SRC, typename T_SRC, Device D_SRC>
 inline void CopyCount(const _PTR_DST<T_DST, D_DST>& dst,
                                           const _PTR_SRC<T_SRC, D_SRC>& src,
                                           const size_t count) noexcept
@@ -279,6 +281,9 @@ public:
     inline ArrayView(const Pointer<T, D>& pBegin, const size_t count) noexcept
         : m_pBegin(pBegin), m_count(count)
     {  }
+
+    __host__ __device__ inline Pointer<T, D> begin() const noexcept { return this->m_pBegin;                 }
+    __host__ __device__ inline Pointer<T, D> end()   const noexcept { return this->m_pBegin + this->m_count; }
 
     __host__ __device__ inline const Pointer<T, D>& GetPointer() const noexcept { return this->m_pBegin; }
     __host__ __device__ inline const size_t&        GetCount()   const noexcept { return this->m_count; }
@@ -781,15 +786,15 @@ __device__ Intersection Ray::Intersects(const Triangle& triangle) const noexcept
  
     // edge 2
     Vec4f32 edge2 = triangle.p0 - triangle.p2; 
-    Vec4f32 vp2 = P - triangle.p2; 
+    Vec4f32 vp2   = P - triangle.p2; 
     C = Vec4f32::DotProduct3D(edge2, vp2); 
     if (Vec4f32::DotProduct3D(N, C) < 0) return Intersection::MakeNullIntersection(*this);; // P is on the right side; 
  
     Intersection intersection;
     intersection.inRay    = *this;
     intersection.t        = t;
-    intersection.location = this->origin + t * this->direction;
-    intersection.normal   = Vec4f32{};//todo
+    intersection.location = P;
+    intersection.normal   = N;//TODO:
     intersection.material = triangle.material;
 
     return intersection;
@@ -994,26 +999,22 @@ int main(int argc, char** argv) {
     Primitives<Array, Device::CPU> primitives;
     primitives.spheres = CPU_Array<Sphere>(2);
     primitives.planes  = CPU_Array<Plane>(5);
-    primitives.triangles = CPU_Array<Triangle>(1);
 
-    for (size_t i = 0; i < primitives.spheres.GetCount(); ++i) {
-        auto& o = primitives.spheres[i];
+    for (auto& o : primitives.spheres) {
         o.material.reflectance = 0.f;
         o.material.roughness = 1.0f;
         o.material.transparency = 0.f;
         o.material.index_of_refraction = 1.0f;
     }
 
-    for (size_t i = 0; i < primitives.planes.GetCount(); ++i) {
-        auto& o = primitives.planes[i];
+    for (auto& o : primitives.planes) {
         o.material.reflectance = 0.f;
         o.material.roughness = 1.0f;
         o.material.transparency = 0.f;
         o.material.index_of_refraction = 1.0f;
     }
 
-    for (size_t i = 0; i < primitives.triangles.GetCount(); ++i) {
-        auto& o = primitives.triangles[i];
+    for (auto& o : primitives.triangles) {
         o.material.reflectance = 0.f;
         o.material.roughness = 1.0f;
         o.material.transparency = 0.f;
@@ -1060,11 +1061,12 @@ int main(int argc, char** argv) {
     primitives.planes[4].material.diffuse   = Colorf32{.75f, .75f, .75f, 1.f};
     primitives.planes[4].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
 
-    primitives.triangles[0].p2 = Vec4f32{ -0.5f, 1.f, 0.5f, 0.f};
-    primitives.triangles[0].p1 = Vec4f32{ 0.5f, 1.f, 0.5f, 0.f};
-    primitives.triangles[0].p0 = Vec4f32{ -0.5f, 0.f, 0.5f, 0.f};
-    primitives.triangles[0].material.diffuse   = Colorf32{1.f, 0.f, 0.f, 1.f};
-    primitives.triangles[0].material.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
+    //float a = 0.25f;
+    //primitives.triangles[0].p0 = Vec4f32{ -a,  +a,  2.f, 0.f};
+    //primitives.triangles[0].p1 = Vec4f32{ +a,  +a,  2.f, 0.f};
+    //primitives.triangles[0].p2 = Vec4f32{ 0.f, 0.f, 2.f, 0.f};
+    //primitives.triangles[0].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
+    //primitives.triangles[0].material.emittance = Colorf32{1.f, 1.f, 1.f, 1.f};
 
     PolarTracer pt(renderParams, primitives);
 
