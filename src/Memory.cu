@@ -325,6 +325,19 @@ public:
         this->m_capacity = newCapacity;
     }
 
+    template <typename U = T>
+    inline void Append(const U&& e) noexcept {
+        if (this->m_count >= this->m_capacity)
+            this->Reserve(1);
+
+        (*this)[this->m_count++] = std::forward<U>(e);
+    }
+
+    template <typename... Args>
+    inline void AppendArgs(const Args&&... args) noexcept {
+        this->Append(T(std::forward<Args>(args)...));
+    }
+
     inline ~Array() noexcept { this->Free(); }
 }; // Array<T, D>
 
