@@ -24,7 +24,7 @@
 
 #define EPSILON (float)0.0001f
 #define MAX_REC (10)
-#define SPP     (10)
+#define SPP     (1000)
 
 struct Camera {
     float   fov;
@@ -86,6 +86,14 @@ struct Intersection {
     Vec4f32  location;  // intersection location
     Vec4f32  normal;    // normal at intersection point
     Material material;  // the material that the intersected object is made of
+
+    inline __device__ __host__ bool operator<(const Intersection& o) const noexcept {
+    	return this->t < o.t;
+    }
+
+    inline __device__ __host__ bool operator>(const Intersection& o) const noexcept {
+    	return this->t > o.t;
+    }
 
     __device__ __host__ static inline Intersection MakeNullIntersection(const Ray& ray) noexcept {
         return Intersection{ray, FLT_MAX};
@@ -232,7 +240,7 @@ __device__ inline void FindClosestIntersection(const Ray& ray,
     for (size_t i = 0; i < objArrayView.GetCount(); i++) {
         const Intersection current = ray.Intersects(objArrayView[i]);
 
-        if (current.t < closest.t)
+        if (current < closest)
             closest = current;
     }
 }
@@ -404,7 +412,7 @@ int main(int argc, char** argv) {
 
     renderParams.width  = WIDTH;
     renderParams.height = HEIGHT;
-    renderParams.camera.position = Vec4f32(0.f, .5f, -2.f, 0.f);
+    renderParams.camera.position = Vec4f32(0.f, .0f, -1.f, 0.f);
     renderParams.camera.fov      = 3.141592f / 4.f;
 
     Primitives<Array, Device::CPU> primitives;
@@ -459,13 +467,13 @@ int main(int argc, char** argv) {
     primitives.planes[2] = primitives.planes[1];
     primitives.planes[2].position = Vec4f32{1.f, 0.f, 0.f, 0.f};
     primitives.planes[2].normal   = Vec4f32{-1.f, 0.f, 0.f, 0.f};
-    primitives.planes[2].material.roughness   = 0.f;
+    primitives.planes[2].material.roughness   = 0.3f;
     primitives.planes[2].material.reflectance = 0.8f;
 
     primitives.planes[3] = primitives.planes[1];
     primitives.planes[3].position = Vec4f32{-1.f, 0.f, 0.f, 0.f};
     primitives.planes[3].normal   = Vec4f32{1.f, 0.f, 0.f, 0.f};
-    primitives.planes[3].material.roughness = 0.25f;
+    primitives.planes[3].material.roughness = 0.1f;
 
     primitives.planes[4].position = Vec4f32{ 0.f, 0.f, renderParams.camera.position.z - 1.f, 0.f};
     primitives.planes[4].normal   = Vec4f32{ 0.f, 0.f, 1.f, 0.f};
@@ -492,10 +500,10 @@ int main(int argc, char** argv) {
     std::cout << "Big numbers:\n";
     std::cout << "-->" << (unsigned int)(WIDTH * HEIGHT) << " pixels.\n";
     std::cout << "-->" << (unsigned int)(WIDTH * HEIGHT * SPP) << " samples.\n";
-    std::cout << "-->" << (unsigned int)(WIDTH * HEIGHT * SPP * MAX_REC) << " photons.\n";
+    std::cout << "-->" << ((std::uint64_t)WIDTH * HEIGHT * SPP * MAX_REC) << " photons.\n";
     std::cout << "Timings:\n";
-    std::cout << "-->" << (unsigned int)((WIDTH * HEIGHT * SPP) / duration) << " samples per sec.\n";
-    std::cout << "-->" << (unsigned int)((WIDTH * HEIGHT * SPP * MAX_REC) / duration) << " photon paths per sec.\n";
+    std::cout << "-->" << (std::uint64_t)((WIDTH * HEIGHT * SPP) / duration) << " samples per sec.\n";
+    std::cout << "-->" << (((std::uint64_t)WIDTH * HEIGHT * SPP * MAX_REC) / duration) << " photon paths per sec.\n";
 
     SaveImage(image, "frame");
 }
