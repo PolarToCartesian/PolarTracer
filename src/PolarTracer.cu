@@ -18,8 +18,8 @@
 // +--------------------+
 
 __constant__ const float  EPSILON = 0.0001f;
-__constant__ const size_t MAX_REC = 10u;
-__constant__ const size_t SPP     = 10u;
+__constant__ const size_t MAX_REC = 1u;
+__constant__ const size_t SPP     = 3u;
 
 // The "Device" enum class represents the devices from which
 // memory can be accessed. This is necessary because the cpu can't
@@ -366,8 +366,8 @@ public:
         this->m_capacity = newCapacity;
     }
 
-    template <typename U = T>
-    inline void Append(const U&& e) noexcept {
+    template <typename U>
+    inline void Append(U&& e) noexcept {
         if (this->m_count >= this->m_capacity)
             this->Reserve(1);
 
@@ -388,6 +388,36 @@ using CPU_Array = Array<T, Device::CPU>;
 
 template <typename T>
 using GPU_Array = Array<T, Device::GPU>;
+
+// +-------------+
+// | Type Traits |
+// +-------------+
+
+struct TrueType  { static constexpr bool VALUE = true; };
+struct FalseType { static constexpr bool VALUE = false; };
+
+
+template <typename U, typename V>
+struct AreTypesEqual_ : FalseType {  };
+
+template <typename U>
+struct AreTypesEqual_<U, U> : TrueType {  };
+
+template <typename U, typename V>
+inline constexpr bool AreTypesEqual = AreTypesEqual_<U, V>::VALUE;
+
+
+template <bool B, typename TRUE_T, typename FALSE_T>
+struct ConditionalType_;
+
+template <typename TRUE_T, typename FALSE_T>
+struct ConditionalType_<true, TRUE_T, FALSE_T> { using TYPE = TRUE_T; };
+
+template <typename TRUE_T, typename FALSE_T>
+struct ConditionalType_<false, TRUE_T, FALSE_T> { using TYPE = FALSE_T; };
+
+template <bool B, typename U, typename V>
+using ConditionalType = typename ConditionalType_<B, U, V>::TYPE;
 
 // +--------+
 // | Random |
@@ -705,9 +735,9 @@ struct Plane : ObjectBase {
 }; // Plane
 
 struct Triangle : ObjectBase {
-    Vec4f32 p0; // Position of the 1st vertex
-    Vec4f32 p1; // Position of the 2nd vertex
-    Vec4f32 p2; // Position of the 3rd vertex
+    Vec4f32 v0; // Position of the 1st vertex
+    Vec4f32 v1; // Position of the 2nd vertex
+    Vec4f32 v2; // Position of the 3rd vertex
 };
 
 struct Intersection {
@@ -794,8 +824,8 @@ __device__ Intersection Ray::Intersects(const Plane& plane) const noexcept {
 template <>
 __device__ Intersection Ray::Intersects(const Triangle& triangle) const noexcept {
     // compute plane's normal
-    Vec4f32 v0v1 = triangle.p1 - triangle.p0; 
-    Vec4f32 v0v2 = triangle.p2 - triangle.p0; 
+    Vec4f32 v0v1 = triangle.v1 - triangle.v0; 
+    Vec4f32 v0v2 = triangle.v2 - triangle.v0; 
     // no need to normalize
     Vec4f32 N = Vec4f32::CrossProduct3D(v0v1, v0v2); // N 
     float area2 = N.GetLength3D(); 
@@ -808,7 +838,7 @@ __device__ Intersection Ray::Intersects(const Triangle& triangle) const noexcept
         return Intersection::MakeNullIntersection(*this); // they are parallel so they don't intersect ! 
  
     // compute d parameter using equation 2
-    float d = Vec4f32::DotProduct3D(N, triangle.p0); 
+    float d = Vec4f32::DotProduct3D(N, triangle.v0); 
  
     // compute t (equation 3)
     float t = (Vec4f32::DotProduct3D(N, this->origin) + d) / NdotRayDirection; 
@@ -822,20 +852,20 @@ __device__ Intersection Ray::Intersects(const Triangle& triangle) const noexcept
     Vec4f32 C; // vector perpendicular to triangle's plane 
  
     // edge 0
-    Vec4f32 edge0 = triangle.p1 - triangle.p0; 
-    Vec4f32 vp0 = P - triangle.p0; 
+    Vec4f32 edge0 = triangle.v1 - triangle.v0; 
+    Vec4f32 vp0 = P - triangle.v0; 
     C = Vec4f32::DotProduct3D(edge0, vp0);
     if (Vec4f32::DotProduct3D(N, C) < 0) return Intersection::MakeNullIntersection(*this); // P is on the right side 
  
     // edge 1
-    Vec4f32 edge1 = triangle.p2 - triangle.p1; 
-    Vec4f32 vp1 = P - triangle.p1; 
+    Vec4f32 edge1 = triangle.v2 - triangle.v1; 
+    Vec4f32 vp1 = P - triangle.v1; 
     C = Vec4f32::DotProduct3D(edge1, vp1); 
     if (Vec4f32::DotProduct3D(N, C) < 0) return Intersection::MakeNullIntersection(*this);; // P is on the right side 
  
     // edge 2
-    Vec4f32 edge2 = triangle.p0 - triangle.p2; 
-    Vec4f32 vp2   = P - triangle.p2; 
+    Vec4f32 edge2 = triangle.v0 - triangle.v2; 
+    Vec4f32 vp2   = P - triangle.v2; 
     C = Vec4f32::DotProduct3D(edge2, vp2); 
     if (Vec4f32::DotProduct3D(N, C) < 0) return Intersection::MakeNullIntersection(*this);; // P is on the right side; 
  
@@ -1032,6 +1062,46 @@ public:
     }
 }; // PolarTracer
 
+CPU_Array<Triangle> LoadObjectFile(const char* filename, const Material& material) {
+    FILE* fp = fopen(filename, "r");
+
+    if (!fp)
+        printf("Error opening .obj File\n");
+
+    CPU_Array<Vec4f32>  vertices;
+    CPU_Array<Triangle> triangles;
+
+    char lineBuffer[255];
+    while (std::fgets(lineBuffer, sizeof(lineBuffer), fp) != nullptr) {
+        switch (lineBuffer[0]) {
+        case 'v':
+        {
+            Vec4f32 v;
+            std::fscanf(fp, "v %f %f %f", &v.x, &v.y, &v.z);
+            vertices.Append(v);
+            break;
+        }
+        case 'f':
+        {
+            unsigned int index0, index1, index2;
+            std::fscanf(fp, "f %u %u %u", &index0, &index1, &index2);
+            Triangle t;
+            t.v0 = vertices[index0 - 1];
+            t.v1 = vertices[index1 - 1];
+            t.v2 = vertices[index2 - 1];
+            t.material = material;
+
+            triangles.Append(t);
+            break;
+        }
+        }
+    }
+
+    fclose(fp);
+
+    return triangles;
+}
+
 #define WIDTH  (1920)
 #define HEIGHT (1080)
 
@@ -1042,7 +1112,7 @@ int main(int argc, char** argv) {
 
     renderParams.width  = WIDTH;
     renderParams.height = HEIGHT;
-    renderParams.camera.position = Vec4f32(0.f, .0f, -1.f, 0.f);
+    renderParams.camera.position = Vec4f32(0.f, .0f, -5.f, 0.f);
     renderParams.camera.fov      = 3.141592f / 4.f;
 
     Primitives<Array, Device::CPU> primitives;
@@ -1116,6 +1186,15 @@ int main(int argc, char** argv) {
     //primitives.triangles[0].p2 = Vec4f32{ 0.f, 0.f, 2.f, 0.f};
     //primitives.triangles[0].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
     //primitives.triangles[0].material.emittance = Colorf32{1.f, 1.f, 1.f, 1.f};
+
+    Material bunnyMaterial;
+    bunnyMaterial.diffuse   = Colorf32{.75f, .75f, .75f, 1.f};
+    bunnyMaterial.emittance = Colorf32{1.f, 1.f, 1.f, 1.f};
+
+    auto bunnyTriangles = LoadObjectFile("res/bunny.obj", bunnyMaterial);
+    for (auto tr : bunnyTriangles) {
+        primitives.triangles.Append(tr);
+    }
 
     PolarTracer pt(renderParams, primitives);
 
