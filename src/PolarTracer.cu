@@ -4,6 +4,7 @@
 #include <ostream>
 #include <cassert>
 #include <stdio.h>
+#include <sstream>
 #include <optional>
 #include <iostream>
 
@@ -18,8 +19,8 @@
 // +--------------------+
 
 __constant__ const float  EPSILON = 0.0001f;
-__constant__ const size_t MAX_REC = 10u;
-__constant__ const size_t SPP     = 1000u;
+__constant__ const size_t MAX_REC = 5u;
+__constant__ const size_t SPP     = 5u;
 
 // The "Device" enum class represents the devices from which
 // memory can be accessed. This is necessary because the cpu can't
@@ -389,36 +390,6 @@ using CPU_Array = Array<T, Device::CPU>;
 template <typename T>
 using GPU_Array = Array<T, Device::GPU>;
 
-// +-------------+
-// | Type Traits |
-// +-------------+
-
-struct TrueType  { static constexpr bool VALUE = true; };
-struct FalseType { static constexpr bool VALUE = false; };
-
-
-template <typename U, typename V>
-struct AreTypesEqual_ : FalseType {  };
-
-template <typename U>
-struct AreTypesEqual_<U, U> : TrueType {  };
-
-template <typename U, typename V>
-inline constexpr bool AreTypesEqual = AreTypesEqual_<U, V>::VALUE;
-
-
-template <bool B, typename TRUE_T, typename FALSE_T>
-struct ConditionalType_;
-
-template <typename TRUE_T, typename FALSE_T>
-struct ConditionalType_<true, TRUE_T, FALSE_T> { using TYPE = TRUE_T; };
-
-template <typename TRUE_T, typename FALSE_T>
-struct ConditionalType_<false, TRUE_T, FALSE_T> { using TYPE = FALSE_T; };
-
-template <bool B, typename U, typename V>
-using ConditionalType = typename ConditionalType_<B, U, V>::TYPE;
-
 // +--------+
 // | Random |
 // +--------+
@@ -627,42 +598,67 @@ typedef Vec4<std::uint8_t> Coloru8;
 typedef Vec4<float>        Colorf32;
 typedef Vec4<float>        Vec4f32;
 
+#define blackf32       Colorf32{0.f, 0.f, 0.f, 1.f}
+#define whitef32       Colorf32{1.f, 1.f, 1.f, 1.f}
+#define redf32         Colorf32{1.f, 0.f, 0.f, 1.f}
+#define greenf32       Colorf32{0.f, 1.f, 0.f, 1.f}
+#define bluef32        Colorf32{0.f, 0.f, 1.f, 1.f}
+#define transparentf32 Colorf32{0.f, 0.f, 0.f, 0.f}
+
+#define blacku8       Coloru8{0u, 0u, 0u, 255u}
+#define whiteu8       Coloru8{1u, 1u, 1u, 255u}
+#define redu8         Coloru8{1u, 0u, 0u, 255u}
+#define greenu8       Coloru8{0u, 1u, 0u, 255u}
+#define blueu8        Coloru8{0u, 0u, 1u, 255u}
+#define transparentu8 Coloru8{255u, 255u, 255u, 255u}
+
 // +-------+
 // | Image |
 // +-------+
 
-template <typename T, Device D>
-class Image {
-private:
+template <template<class, Device> typename Container, typename T, Device D>
+class ImageInterface {
+protected:
     std::uint16_t m_width   = 0;
     std::uint16_t m_height  = 0;
     std::uint32_t m_nPixels = 0;
 
-    Array<T, D> m_pArray;
+    Container<T, D> m_container;
 
+public:
+    ImageInterface() = default;
+
+    __host__ __device__ inline std::uint16_t GetWidth()      const noexcept { return this->m_width;   }
+    __host__ __device__ inline std::uint16_t GetHeight()     const noexcept { return this->m_height;  }
+    __host__ __device__ inline std::uint32_t GetPixelCount() const noexcept { return this->m_nPixels; }
+
+    __host__ __device__ inline Pointer<T, D> GetPtr() const noexcept { return this->m_container; }
+
+    __host__ __device__ inline       T& operator()(const size_t i)       noexcept { return this->m_container[i]; }
+    __host__ __device__ inline const T& operator()(const size_t i) const noexcept { return this->m_container[i]; }
+
+    __host__ __device__ inline       T& operator()(const size_t x, const size_t y)       noexcept { return this->m_container[y * this->m_width + this->m_height]; }
+    __host__ __device__ inline const T& operator()(const size_t x, const size_t y) const noexcept { return this->m_container[y * this->m_width + this->m_height]; }
+}; // ImageBase
+
+template <typename T, Device D>
+using ImageView = ImageInterface<ArrayView, T, D>; // ImageView
+
+template <typename T, Device D>
+class Image : public ImageInterface<Array, T, D> {
 public:
     Image() = default;
 
-    inline Image(const std::uint16_t width, const std::uint16_t height) noexcept
-        : m_width(width),
-        m_height(height),
-        m_nPixels(static_cast<std::uint32_t>(width)* height),
-        m_pArray(Array<T, D>(this->m_nPixels))
-    { }
-
-    __host__ __device__ inline std::uint16_t GetWidth()      const noexcept { return this->m_width; }
-    __host__ __device__ inline std::uint16_t GetHeight()     const noexcept { return this->m_height; }
-    __host__ __device__ inline std::uint32_t GetPixelCount() const noexcept { return this->m_nPixels; }
-
-    __host__ __device__ inline Pointer<T, D> GetPtr() const noexcept { return this->m_pArray; }
-
-    __host__ __device__ inline       T& operator()(const size_t i)       noexcept { return this->m_pArray[i]; }
-    __host__ __device__ inline const T& operator()(const size_t i) const noexcept { return this->m_pArray[i]; }
-
-    __host__ __device__ inline       T& operator()(const size_t x, const size_t y)       noexcept { return this->m_pArray[y * this->m_width + this->m_height]; }
-    __host__ __device__ inline const T& operator()(const size_t x, const size_t y) const noexcept { return this->m_pArray[y * this->m_width + this->m_height]; }
-
+    inline Image(const std::uint16_t width, const std::uint16_t height) noexcept {
+        this->m_width     = width;
+        this->m_height    = height;
+        this->m_nPixels   = static_cast<std::uint32_t>(width) * height;
+        this->m_container = Array<T, D>(this->m_nPixels);
+    }
 }; // Image
+
+template <typename T, Device D>
+using Texture = Image<T, D>;
 
 void SaveImage(const Image<Coloru8, Device::CPU>& image, const std::string& filename) noexcept {
     const std::string fullFilename = filename + ".pam";
@@ -692,7 +688,7 @@ struct Camera {
 }; // Camera
 
 struct RenderParams {
-    size_t width = 0;
+    size_t width  = 0;
     size_t height = 0;
 
     Camera camera;
@@ -720,42 +716,59 @@ struct Material {
     float index_of_refraction = 1.f;
 }; // Material
 
-struct ObjectBase {
-    Material material;
-};
-
-struct Sphere : ObjectBase {
+struct SphereGeometry {
     Vec4f32 center;
     float   radius;
+}; // SphereGeometry
+
+struct Sphere : SphereGeometry {
+    Material material;
 }; // Sphere
 
-struct Plane : ObjectBase {
+struct PlaneGeometry {
     Vec4f32 position; // Any Point On The Plane
     Vec4f32 normal;   // Normal To The Surface
+}; // PlaneGeometry
+
+struct Plane : PlaneGeometry {
+    Material material;
 }; // Plane
 
-struct Triangle : ObjectBase {
+struct TriangleGeometry {
     Vec4f32 v0; // Position of the 1st vertex
     Vec4f32 v1; // Position of the 2nd vertex
     Vec4f32 v2; // Position of the 3rd vertex
-};
+}; // TriangleGeometry
+
+struct Triangle : TriangleGeometry {
+    Material material;
+}; // Triangle
+
+struct BoxGeometry {
+    Vec4f32 center;
+    float   sideLength;
+}; // BoxGeometry
+
+struct Box : BoxGeometry {
+    Material material;
+}; // Box
 
 struct Intersection {
     Ray      inRay;     // incoming ray
-    float            t; // distance from the ray's origin to intersection point
+    float    t;         // distance from the ray's origin to intersection point
     Vec4f32  location;  // intersection location
     Vec4f32  normal;    // normal at intersection point
     Material material;  // the material that the intersected object is made of
 
-    inline __device__ __host__ bool operator<(const Intersection& o) const noexcept {
+    __device__ __host__ inline bool operator<(const Intersection& o) const noexcept {
     	return this->t < o.t;
     }
 
-    inline __device__ __host__ bool operator>(const Intersection& o) const noexcept {
+    __device__ __host__ inline bool operator>(const Intersection& o) const noexcept {
     	return this->t > o.t;
     }
 
-    __device__ __host__ static inline Intersection MakeNullIntersection(const Ray& ray) noexcept {
+    static __device__ __host__ inline Intersection MakeNullIntersection(const Ray& ray) noexcept {
         return Intersection{ray, FLT_MAX};
     }
 }; // Intersection
@@ -764,9 +777,9 @@ template <>
 __device__ Intersection Ray::Intersects(const Sphere& sphere) const noexcept {
     const float radius2 = sphere.radius * sphere.radius;
 
-    const Vec4f32 L = sphere.center - this->origin;
+    const Vec4f32 L   = sphere.center - this->origin;
     const float   tca = Vec4f32::DotProduct3D(L, this->direction);
-    const float   d2 = Vec4f32::DotProduct3D(L, L) - tca * tca;
+    const float   d2  = Vec4f32::DotProduct3D(L, L) - tca * tca;
 
     if (d2 > radius2)
         return Intersection::MakeNullIntersection(*this);
@@ -827,14 +840,8 @@ __device__ Intersection Ray::Intersects(const Triangle& triangle) const noexcept
 
     const Vec4f32 v0v1 = triangle.v1 - triangle.v0; 
     const Vec4f32 v0v2 = triangle.v2 - triangle.v0; 
-    const Vec4f32 a = this->direction;
-    const Vec4f32 b = v0v2;
-    const Vec4f32 pvec = {
-        a.y*b.z-a.z*b.y,
-        a.z*b.x-a.x*b.z,
-        a.x*b.y-a.y*b.x,
-        0
-    }; 
+    const Vec4f32 pvec = Vec4f32::CrossProduct3D(v0v2,  this->direction);
+
     const float det = Vec4f32::DotProduct3D(v0v1, pvec); 
 
     // ray and triangle are parallel if det is close to 0
@@ -857,7 +864,7 @@ __device__ Intersection Ray::Intersects(const Triangle& triangle) const noexcept
 
     intersection.inRay    = *this;
     intersection.location = this->origin + intersection.t * this->direction;
-    intersection.normal   = Vec4f32(0.f, 0.f, 0.f, 0.f);
+    intersection.normal   = Vec4f32::Normalized3D(Vec4f32::CrossProduct3D(v0v1, v0v2)); //TODO:: Actual Normal
     intersection.material = triangle.material;
 
     return intersection;
@@ -881,8 +888,8 @@ template <typename T_OBJ>
 __device__ inline void FindClosestIntersection(const Ray& ray,
                                                Intersection& closest, // in/out
                                                const GPU_ArrayView<T_OBJ>& objArrayView) noexcept {
-    for (size_t i = 0; i < objArrayView.GetCount(); i++) {
-        const Intersection current = ray.Intersects(objArrayView[i]);
+    for (const T_OBJ& obj : objArrayView) {
+        const Intersection current = ray.Intersects(obj);
 
         if (current < closest)
             closest = current;
@@ -961,27 +968,22 @@ __device__ Colorf32 RayTrace(const Ray& ray,
     }
     
     // Black
-    return Vec4f32{0.f, 0.f, 0.F, 1.f};
+    return blackf32;
 }
 
 // Can't pass arguments via const& because these variables exist on the host and not on the device
 __global__ void RayTracingDispatcher(const GPU_Ptr<Coloru8> pSurface,
                                      const GPU_Ptr<RenderParams> pParams,
                                      const Primitives<ArrayView, Device::GPU> primitives) {
-
-    curandState_t randState;
-
     // Calculate the thread's (X, Y) location
     const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
     const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
 
-    curand_init(pixelX, pixelY, 0, &randState);
-
     // Bounds check
     if (pixelX >= pParams->width || pixelY >= pParams->height) return;
 
-    // Determine the pixel's index into the image buffer
-    const size_t index = pixelX + pixelY * pParams->width;
+    curandState_t randState;
+    curand_init(pixelX, pixelY, 0, &randState);
 
     const Ray cameraRay = GenerateCameraRay(pixelX, pixelY, pParams, &randState);
 
@@ -992,6 +994,9 @@ __global__ void RayTracingDispatcher(const GPU_Ptr<Coloru8> pSurface,
     
     pixelColor *= 255.f / static_cast<float>(SPP);
     pixelColor.Clamp(0.f, 255.f);
+
+    // Determine the pixel's index into the image buffer
+    const size_t index = pixelX + pixelY * pParams->width;
 
     // Save the result to the buffer
     *(pSurface + index) = Coloru8(pixelColor.x, pixelColor.y, pixelColor.z, pixelColor.w);
@@ -1045,8 +1050,6 @@ public:
         CopySize(outSurface.GetPtr(), this->device.m_frameBuffer.GetPtr(), bufferSize);
     }
 }; // PolarTracer
-
-#include <sstream>
 
 CPU_Array<Triangle> LoadObjectFile(const char* filename, const Material& material) {
     FILE* fp = fopen(filename, "r");
@@ -1132,7 +1135,7 @@ int main(int argc, char** argv) {
     primitives.planes[0].position = Vec4f32{ 0.f, -.25f, 0.f, 0.f};
     primitives.planes[0].normal   = Vec4f32{ 0.f, 1.f, 0.f, 0.f};
     primitives.planes[0].material.diffuse   = Colorf32{1.f, 1.f, 1.f, 1.f};
-    primitives.planes[0].material.emittance = Colorf32{0.5f, 0.5f, 0.5f, 1.f};
+    primitives.planes[0].material.emittance = Colorf32{0.25f, 0.25f, 0.25f, 1.f};
 
     primitives.planes[1].position = Vec4f32{ 0.f, 0.f, 1.f, 0.f};
     primitives.planes[1].normal   = Vec4f32{ 0.f, 0.f, -1.f, 0.f};
@@ -1144,8 +1147,9 @@ int main(int argc, char** argv) {
     primitives.planes[2] = primitives.planes[1];
     primitives.planes[2].position = Vec4f32{1.2f, 0.f, 0.f, 0.f};
     primitives.planes[2].normal   = Vec4f32{-1.f, 0.f, 0.f, 0.f};
-    primitives.planes[2].material.roughness   = 0.3f;
-    primitives.planes[2].material.reflectance = 1.0f;
+    primitives.planes[2].material.diffuse = {1.f, 0.f, 0.f, 1.f};
+    primitives.planes[2].material.roughness   = 1.0f;
+    primitives.planes[2].material.reflectance = 0.0f;
 
     primitives.planes[3] = primitives.planes[1];
     primitives.planes[3].position = Vec4f32{-1.2f, 0.f, 0.f, 0.f};
@@ -1156,21 +1160,21 @@ int main(int argc, char** argv) {
     primitives.planes[4].position = Vec4f32{ 0.f, 0.f, renderParams.camera.position.z - 1.f, 0.f};
     primitives.planes[4].normal   = Vec4f32{ 0.f, 0.f, 1.f, 0.f};
     primitives.planes[4].material.diffuse   = Colorf32{.75f, .75f, .75f, 1.f};
-    primitives.planes[4].material.emittance = Colorf32{1.f, 1.f, 1.f, 1.f};
+    primitives.planes[4].material.emittance = Colorf32{0.25f, 0.25f, 0.25f, 1.f};
 
     Material bunnyMaterial;
     bunnyMaterial.diffuse   = Colorf32{.75f, .75f, .75f, 1.f};
     bunnyMaterial.emittance = Colorf32{0.f, 0.f, 0.f, 1.f};
     bunnyMaterial.reflectance = 0.f;
     bunnyMaterial.roughness = 1.0f;
-    bunnyMaterial.transparency = 0.f;
+    bunnyMaterial.transparency = 0.0f;
     bunnyMaterial.index_of_refraction = 1.0f;
 
     auto bunnyTriangles = LoadObjectFile("res/bunny.obj", bunnyMaterial);
     for (auto tr : bunnyTriangles) {
         tr.v0 *= 10; tr.v0.y -= 0.5f; tr.v0.z *= -1.f; tr.v0.x *= -1.f; tr.v0.x -= 0.1f;
-        tr.v1 *= 10; tr.v1.y -= 0.5f; tr.v1.z *= -1.f; tr.v1.x *= -1.f; tr.v0.x -= 0.1f;
-        tr.v2 *= 10; tr.v2.y -= 0.5f; tr.v2.z *= -1.f; tr.v2.x *= -1.f; tr.v0.x -= 0.1f;
+        tr.v1 *= 10; tr.v1.y -= 0.5f; tr.v1.z *= -1.f; tr.v1.x *= -1.f; tr.v1.x -= 0.1f;
+        tr.v2 *= 10; tr.v2.y -= 0.5f; tr.v2.z *= -1.f; tr.v2.x *= -1.f; tr.v2.x -= 0.1f;
         primitives.triangles.Append(tr);
     }
 
