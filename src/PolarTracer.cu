@@ -269,6 +269,10 @@ using GPU_UniquePtr = UniquePointer<T, Device::GPU>;
 // of type T following the address.
 template <typename T, Device D>
 class ArrayView {
+public:
+    using VALUE_TYPE = T;
+    constexpr static Device DEVICE = D;
+
 protected:
     Pointer<T, D> m_pBegin;
 
@@ -616,14 +620,14 @@ typedef Vec4<float>        Vec4f32;
 // | Image |
 // +-------+
 
-template <template<class, Device> typename Container, typename T, Device D>
+template <class Container>
 class ImageInterface {
 protected:
     std::uint16_t m_width   = 0;
     std::uint16_t m_height  = 0;
     std::uint32_t m_nPixels = 0;
 
-    Container<T, D> m_container;
+    Container m_container;
 
 public:
     ImageInterface() = default;
@@ -632,20 +636,20 @@ public:
     __host__ __device__ inline std::uint16_t GetHeight()     const noexcept { return this->m_height;  }
     __host__ __device__ inline std::uint32_t GetPixelCount() const noexcept { return this->m_nPixels; }
 
-    __host__ __device__ inline Pointer<T, D> GetPtr() const noexcept { return this->m_container; }
+    __host__ __device__ inline Pointer<Container::VALUE_TYPE, Container::DEVICE> GetPtr() const noexcept { return this->m_container; }
 
-    __host__ __device__ inline       T& operator()(const size_t i)       noexcept { return this->m_container[i]; }
-    __host__ __device__ inline const T& operator()(const size_t i) const noexcept { return this->m_container[i]; }
+    __host__ __device__ inline       Container::VALUE_TYPE& operator()(const size_t i)       noexcept { return this->m_container[i]; }
+    __host__ __device__ inline const Container::VALUE_TYPE& operator()(const size_t i) const noexcept { return this->m_container[i]; }
 
-    __host__ __device__ inline       T& operator()(const size_t x, const size_t y)       noexcept { return this->m_container[y * this->m_width + this->m_height]; }
-    __host__ __device__ inline const T& operator()(const size_t x, const size_t y) const noexcept { return this->m_container[y * this->m_width + this->m_height]; }
+    __host__ __device__ inline       Container::VALUE_TYPE& operator()(const size_t x, const size_t y)       noexcept { return this->m_container[y * this->m_width + this->m_height]; }
+    __host__ __device__ inline const Container::VALUE_TYPE& operator()(const size_t x, const size_t y) const noexcept { return this->m_container[y * this->m_width + this->m_height]; }
 }; // ImageBase
 
 template <typename T, Device D>
-using ImageView = ImageInterface<ArrayView, T, D>; // ImageView
+using ImageView = ImageInterface<ArrayView<T, D>>; // ImageView
 
 template <typename T, Device D>
-class Image : public ImageInterface<Array, T, D> {
+class Image : public ImageInterface<Array<T, D>> {
 public:
     Image() = default;
 
@@ -896,7 +900,7 @@ __device__ inline void FindClosestIntersection(const Ray& ray,
     }
 }
 
-template <template<typename _IDC_T, Device _IDC_D> typename Container, Device D>
+template <template<typename, Device> typename Container, Device D>
 struct Primitives {
     Container<Sphere, D>   spheres;
     Container<Plane, D>    planes;
