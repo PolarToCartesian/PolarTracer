@@ -383,15 +383,15 @@ namespace Math {
 
     template <typename T> std::ostream& operator<<(std::ostream& stream, const Vec4<T>& v) noexcept;
 
-    template <typename T, typename U> __host__ __device__ inline auto DotProduct3D(const Vec4<T> a, const Vec4<U> b) noexcept -> decltype(a.x + b.x);
-    template <typename T, typename U> __host__ __device__ inline auto DotProduct4D(const Vec4<T> a, const Vec4<U> b) noexcept -> decltype(a.x + b.x);
+    template <typename T, typename U> __host__ __device__ inline decltype(std::declval<T>() + std::declval<U>()) DotProduct3D(const Vec4<T> a, const Vec4<U> b) noexcept;
+    template <typename T, typename U> __host__ __device__ inline decltype(std::declval<T>() + std::declval<U>()) DotProduct4D(const Vec4<T> a, const Vec4<U> b) noexcept;
 
     template <typename T> __host__ __device__ inline Vec4<T> Normalized3D(Vec4<T> v) noexcept; 
     template <typename T> __host__ __device__ inline Vec4<T> Normalized4D(Vec4<T> v) noexcept;
 
-    template <typename T, typename U> __host__ __device__ inline auto Reflected3D   (const Vec4<T> inDirection, const Vec4<U> normal)             noexcept -> Vec4<decltype(inDirection.x + normal.x)>;
-    template <typename T, typename U> __host__ __device__ inline auto CrossProduct3D(const Vec4<T> a,           const Vec4<U> b)                  noexcept -> Vec4<decltype(a.x           + b.x     )>;
-    template <typename T, typename U> __host__ __device__ inline auto Refracted     (const Vec4<T> in,          const Vec4<U> n, const float ior) noexcept -> Vec4<decltype(in.x          + n.x     )>;
+    template <typename T, typename U> __host__ __device__ inline Vec4<decltype(std::declval<T>() + std::declval<U>())> Reflected3D   (const Vec4<T> inDirection, const Vec4<U> normal)             noexcept;
+    template <typename T, typename U> __host__ __device__ inline Vec4<decltype(std::declval<T>() + std::declval<U>())> CrossProduct3D(const Vec4<T> a,           const Vec4<U> b)                  noexcept;
+    template <typename T, typename U> __host__ __device__ inline Vec4<decltype(std::declval<T>() + std::declval<U>())> Refracted     (const Vec4<T> in,                Vec4<U> n, const float ior) noexcept;
 
     template <typename T> __host__ __device__ inline Vec4<T> Clamped(Vec4<T> v, const T min, const T max) noexcept;
 }; // namespace Math
@@ -523,12 +523,12 @@ namespace Math {
     
 
     template <typename T, typename U>
-    __host__ __device__ inline auto DotProduct3D(const Vec4<T> a, const Vec4<U> b) noexcept -> decltype(a.x + b.x) {
+    __host__ __device__ inline decltype(std::declval<T>() + std::declval<U>()) DotProduct3D(const Vec4<T> a, const Vec4<U> b) noexcept {
         return a.x * b.x + a.y * b.y + a.z * b.z;
     }
 
     template <typename T, typename U>
-    __host__ __device__ inline auto DotProduct4D(const Vec4<T> a, const Vec4<U> b) noexcept -> decltype(a.x + b.x) {
+    __host__ __device__ inline decltype(std::declval<T>() + std::declval<U>()) DotProduct4D(const Vec4<T> a, const Vec4<U> b) noexcept{
         return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
     }
 
@@ -545,12 +545,12 @@ namespace Math {
     }
 
     template <typename T, typename U>
-    __host__ __device__ inline auto Reflected3D(const Vec4<T> inDirection, const Vec4<U> normal) noexcept -> Vec4<decltype(inDirection.x + normal.x)> {
+    __host__ __device__ inline Vec4<decltype(std::declval<T>() + std::declval<U>())> Reflected3D(const Vec4<T> inDirection, const Vec4<U> normal) noexcept {
         return inDirection - 2 * DotProduct3D(inDirection, normal) * normal;
     }
 
     template <typename T, typename U>
-    __host__ __device__ inline auto CrossProduct3D(const Vec4<T> a, const Vec4<U> b) noexcept -> Vec4<decltype(a.x + b.x)>{
+    __host__ __device__ inline Vec4<decltype(std::declval<T>() + std::declval<U>())> CrossProduct3D(const Vec4<T> a, const Vec4<U> b) noexcept {
         return Vec4<decltype(a.x + b.x)>{
             a.y*b.z-a.z*b.y,
             a.z*b.x-a.x*b.z,
@@ -566,7 +566,7 @@ namespace Math {
     }
 
     template <typename T>
-    __device__ inline Vec4<T> Random3DUnitVector(curandState_t* pRandSate) noexcept {
+    __device__ inline Vec4<T> Random3DUnitVector(curandState_t* const pRandSate) noexcept {
         return Normalized3D(Vec4<T>(2.0f * RandomFloat(pRandSate) - 1.0f,
                                     2.0f * RandomFloat(pRandSate) - 1.0f,
                                     2.0f * RandomFloat(pRandSate) - 1.0f,
@@ -574,9 +574,9 @@ namespace Math {
     }
 
     template <typename T, typename U>
-    __host__ __device__ inline auto Refracted(const Vec4<T>& in, Vec4<U> n, const float ior) noexcept -> Vec4<decltype(in.x + n.x)> {
+    __host__ __device__ inline Vec4<decltype(std::declval<T>() + std::declval<U>())> Refracted(const Vec4<T> in, Vec4<U> n, const float ior) noexcept {
         auto cosi = ::Utility::Clamp(DotProduct3D(in, n), -1.f, 1.f); 
-        auto etai = 1, etat = ior; 
+        float etai = 1.f, etat = ior; 
         if (cosi < 0) {
             cosi = -cosi;
         } else {
@@ -587,7 +587,7 @@ namespace Math {
         auto eta = etai / etat; 
         auto k = 1 - eta * eta * (1 - cosi * cosi); 
     
-        return (k < 0) ? Vec4decltype(a.x + b.x)<>(0, 0, 0, 0) : (eta * in + (eta * cosi - sqrtf(k)) * n); 
+        return (k < 0) ? Vec4<decltype(std::declval<T>() + std::declval<U>())>(0, 0, 0, 0) : (eta * in + (eta * cosi - sqrtf(k)) * n); 
     }
 
     template <typename T>
@@ -632,13 +632,13 @@ public:
     __host__ __device__ inline std::uint16_t GetHeight()     const noexcept { return this->m_height;  }
     __host__ __device__ inline std::uint32_t GetPixelCount() const noexcept { return this->m_nPixels; }
 
-    __host__ __device__ inline Memory::Pointer<Container::VALUE_TYPE, Container::DEVICE> GetPtr() const noexcept { return this->m_container; }
+    __host__ __device__ inline Memory::Pointer<typename Container::VALUE_TYPE, Container::DEVICE> GetPtr() const noexcept { return this->m_container; }
 
-    __host__ __device__ inline       Container::VALUE_TYPE& operator()(const size_t i)       noexcept { return this->m_container[i]; }
-    __host__ __device__ inline const Container::VALUE_TYPE& operator()(const size_t i) const noexcept { return this->m_container[i]; }
+    __host__ __device__ inline       typename Container::VALUE_TYPE& operator()(const size_t i)       noexcept { return this->m_container[i]; }
+    __host__ __device__ inline const typename Container::VALUE_TYPE& operator()(const size_t i) const noexcept { return this->m_container[i]; }
 
-    __host__ __device__ inline       Container::VALUE_TYPE& operator()(const size_t x, const size_t y)       noexcept { return this->m_container[y * this->m_width + this->m_height]; }
-    __host__ __device__ inline const Container::VALUE_TYPE& operator()(const size_t x, const size_t y) const noexcept { return this->m_container[y * this->m_width + this->m_height]; }
+    __host__ __device__ inline       typename Container::VALUE_TYPE& operator()(const size_t x, const size_t y)       noexcept { return this->m_container[y * this->m_width + this->m_height]; }
+    __host__ __device__ inline const typename Container::VALUE_TYPE& operator()(const size_t x, const size_t y) const noexcept { return this->m_container[y * this->m_width + this->m_height]; }
 }; // ImageBase
 
 template <typename T, Device D>
@@ -948,7 +948,7 @@ __device__ Math::Colorf32 RayTrace(const Ray& ray,
 
             if (material.reflectance > rngd) {
                 // Compute Reflexion
-                newRay.direction = material.roughness * Math::Random3DUnitVector(randState) + (1 - material.roughness) * Math::Reflected3D(ray.direction, intersection.normal);
+                newRay.direction = material.roughness * Math::Random3DUnitVector<float>(randState) + (1 - material.roughness) * Math::Reflected3D(ray.direction, intersection.normal);
             } else if (material.transparency + material.reflectance > rngd) {
                 // Compute Transparency
                 const bool outside = Math::DotProduct3D(ray.direction, intersection.normal) < 0;
@@ -957,7 +957,7 @@ __device__ Math::Colorf32 RayTrace(const Ray& ray,
                 newRay.origin    = intersection.location + (outside ? -1 : 1) * EPSILON * intersection.normal;
             } else {
                 // Compute Diffuse
-                newRay.direction = Math::Random3DUnitVector(randState);
+                newRay.direction = Math::Random3DUnitVector<float>(randState);
             }
             
             const auto materialComp = RayTrace<_N + 1u>(newRay, primitives, randState);
