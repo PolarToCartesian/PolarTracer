@@ -5,6 +5,7 @@
 #include <cassert>
 #include <stdio.h>
 #include <sstream>
+#include <fstream>
 #include <optional>
 #include <iostream>
 
@@ -150,8 +151,10 @@ namespace Memory {
         }
     
         inline void Free() const noexcept {
-            // Since we use placement new, we have to call T's destructor ourselves
-            this->m_ptr->~T();
+            if constexpr (!std::is_trivially_destructible_v<T>) {
+                // Since we use placement new, we have to call T's destructor ourselves
+                this->m_ptr->~T();
+            }
     
             // and then free the memory
             ::Memory::Free(this->m_ptr);
@@ -174,6 +177,9 @@ namespace Memory {
     
         __host__ __device__ inline const Pointer<T, D>& GetPointer() const noexcept { return this->m_ptr; }
     
+        template <typename U>
+        __host__ __device__ inline Pointer<U, D> AsPointerTo() const noexcept { return this->m_ptr.AsPointerTo<U>(); }
+
         __host__ __device__ inline operator const Pointer<T, D>& () const noexcept { return this->m_ptr; }
     
         __host__ __device__ inline operator T* () const noexcept { return this->m_ptr; }
@@ -248,6 +254,14 @@ namespace Memory {
             : Array(o.GetCount())
         {
             CopyCount(*this, o, this->GetCapacity());
+        }
+
+        template <typename T2, Device D_O>
+        inline Array(const Array<T2, D_O>& o) noexcept
+            : Array(o.GetCount())
+        {
+            for (size_t i = 0u; i < this->GetCount(); ++i)
+                (*this)[i] = o[i];
         }
 
         inline Array(Array<T, D>&& o) noexcept {
@@ -617,8 +631,8 @@ namespace Math {
 // +-------+
 
 template <class Container>
-class ImageInterface {
-protected:
+class ImageBase {
+private:
     std::uint16_t m_width   = 0;
     std::uint16_t m_height  = 0;
     std::uint32_t m_nPixels = 0;
@@ -626,12 +640,29 @@ protected:
     Container m_container;
 
 public:
-    ImageInterface() = default;
+    ImageBase() = default;
+
+    template <class Container2>
+    inline ImageBase(const ImageBase<Container2>& o) noexcept {
+        this->m_width   = o.GetWidth();
+        this->m_height  = o.GetHeight();
+        this->m_nPixels = o.GetPixelCount();
+        this->m_container = o.GetContainer();
+    }
+
+    inline ImageBase(const std::uint16_t width, const std::uint16_t height) noexcept {
+        this->m_width     = width;
+        this->m_height    = height;
+        this->m_nPixels   = static_cast<std::uint32_t>(width) * height;
+        this->m_container = Memory::Array<typename Container::VALUE_TYPE, Container::DEVICE>(this->m_nPixels);
+    }
 
     __host__ __device__ inline std::uint16_t GetWidth()      const noexcept { return this->m_width;   }
     __host__ __device__ inline std::uint16_t GetHeight()     const noexcept { return this->m_height;  }
     __host__ __device__ inline std::uint32_t GetPixelCount() const noexcept { return this->m_nPixels; }
 
+    __host__ __device__ inline       Container& GetContainer()       noexcept { return this->m_container; }
+    __host__ __device__ inline const Container& GetContainer() const noexcept { return this->m_container; }
     __host__ __device__ inline Memory::Pointer<typename Container::VALUE_TYPE, Container::DEVICE> GetPtr() const noexcept { return this->m_container; }
 
     __host__ __device__ inline       typename Container::VALUE_TYPE& operator()(const size_t i)       noexcept { return this->m_container[i]; }
@@ -639,26 +670,59 @@ public:
 
     __host__ __device__ inline       typename Container::VALUE_TYPE& operator()(const size_t x, const size_t y)       noexcept { return this->m_container[y * this->m_width + this->m_height]; }
     __host__ __device__ inline const typename Container::VALUE_TYPE& operator()(const size_t x, const size_t y) const noexcept { return this->m_container[y * this->m_width + this->m_height]; }
-}; // ImageBase
-
-template <typename T, Device D>
-using ImageView = ImageInterface<Memory::ArrayView<T, D>>; // ImageView
-
-template <typename T, Device D>
-class Image : public ImageInterface<Memory::Array<T, D>> {
-public:
-    Image() = default;
-
-    inline Image(const std::uint16_t width, const std::uint16_t height) noexcept {
-        this->m_width     = width;
-        this->m_height    = height;
-        this->m_nPixels   = static_cast<std::uint32_t>(width) * height;
-        this->m_container = Memory::Array<T, D>(this->m_nPixels);
-    }
 }; // Image
 
-template <typename T, Device D>
-using Texture = Image<T, D>;
+template <typename T, Device D> using Image     = ImageBase<Memory::Array<T, D>>;
+template <typename T, Device D> using ImageView = ImageBase<Memory::ArrayView<T, D>>; // ImageView
+
+template <typename T> using CPU_Image = Image<T, Device::CPU>;
+template <typename T> using GPU_Image = Image<T, Device::GPU>;
+
+template <typename T> using CPU_ImageView = ImageView<T, Device::CPU>;
+template <typename T> using GPU_ImageView = ImageView<T, Device::GPU>;
+
+template <typename T, Device D> using Texture = Image<T, D>;
+template <typename T> using CPU_Texture = CPU_Image<T>;
+template <typename T> using GPU_Texture = GPU_Image<T>;
+
+CPU_Image<Math::Coloru8> ReadImage(const std::string& filename) noexcept {
+    std::ifstream file(filename.c_str(), std::ifstream::binary);
+
+	if (file.is_open()) {
+		// Read Header
+		std::string magicNumber;
+		float maxColorValue;
+
+        std::uint16_t width, height;
+		file >> magicNumber >> width >> height >> maxColorValue;
+
+		file.ignore(1); // Skip the last whitespace
+        
+        CPU_Image<Math::Coloru8> image(width, height);
+
+		// Parse Image Data
+        if (magicNumber == "P6") {
+            const size_t bufferSize = image.GetPixelCount() * sizeof(Math::Coloru8);
+
+            const Memory::CPU_UniquePtr<std::uint8_t> rawImageData = Memory::AllocateSize<std::uint8_t, Device::CPU>(bufferSize);
+            file.read(rawImageData.AsPointerTo<char>(), bufferSize);
+
+            size_t j = 0;
+            for (size_t i = 0; i < image.GetPixelCount(); ++i)
+                image(i) = Math::Coloru8(rawImageData[j++], rawImageData[j++], rawImageData[j++], 255u);
+        } else {
+			std::cout << magicNumber << " is not supported\n";
+        }
+
+        file.close();
+
+        return image;
+	} else {
+		perror("Error while reading image file");
+    }
+
+    return CPU_Image<Math::Coloru8>(0, 0);
+}
 
 void SaveImage(const Image<Math::Coloru8, Device::CPU>& image, const std::string& filename) noexcept {
     const std::string fullFilename = filename + ".pam";
@@ -1009,19 +1073,21 @@ private:
     } host;
 
     struct {
-        Image<Math::Coloru8, Device::GPU> m_frameBuffer;
+        GPU_Image<Math::Coloru8> m_frameBuffer;
         Memory::GPU_UniquePtr<RenderParams> m_pRenderParams;
 
         Primitives<Memory::Array, Device::GPU> m_primitives;
+        Memory::GPU_Array<GPU_Image<Math::Coloru8>> m_textures;
     } device;
 
 public:
-    PolarTracer(const RenderParams& renderParams, const Primitives<Memory::Array, Device::CPU>& primitives)
+    PolarTracer(const RenderParams& renderParams, const Primitives<Memory::Array, Device::CPU>& primitives = {}, const Memory::CPU_Array<CPU_Image<Math::Coloru8>>& textures = {})
         : host{ renderParams }
     {
         this->device.m_frameBuffer   = Image<Math::Coloru8, Device::GPU>(renderParams.width, renderParams.height);
         this->device.m_pRenderParams = Memory::AllocateSingle<RenderParams, Device::GPU>();
         this->device.m_primitives    = primitives;
+        this->device.m_textures      = textures;
 
         const auto src = Memory::CPU_Ptr<RenderParams>(&this->host.m_renderParams);
         Memory::CopySingle(this->device.m_pRenderParams, src);
@@ -1168,15 +1234,24 @@ int main(int argc, char** argv) {
     bunnyMaterial.transparency = 0.0f;
     bunnyMaterial.index_of_refraction = 1.0f;
 
-    auto bunnyTriangles = LoadObjectFile("res/bunny.obj", bunnyMaterial);
-    for (auto tr : bunnyTriangles) {
-        tr.v0 *= 10; tr.v0.y -= 0.5f; tr.v0.z *= -1.f; tr.v0.x *= -1.f; tr.v0.x -= 0.1f;
-        tr.v1 *= 10; tr.v1.y -= 0.5f; tr.v1.z *= -1.f; tr.v1.x *= -1.f; tr.v1.x -= 0.1f;
-        tr.v2 *= 10; tr.v2.y -= 0.5f; tr.v2.z *= -1.f; tr.v2.x *= -1.f; tr.v2.x -= 0.1f;
-        primitives.triangles.Append(tr);
-    }
+   //auto bunnyTriangles = LoadObjectFile("res/bunny.obj", bunnyMaterial);
+   //for (auto tr : bunnyTriangles) {
+   //    tr.v0 *= 10; tr.v0.y -= 0.5f; tr.v0.z *= -1.f; tr.v0.x *= -1.f; tr.v0.x -= 0.1f;
+   //    tr.v1 *= 10; tr.v1.y -= 0.5f; tr.v1.z *= -1.f; tr.v1.x *= -1.f; tr.v1.x -= 0.1f;
+   //    tr.v2 *= 10; tr.v2.y -= 0.5f; tr.v2.z *= -1.f; tr.v2.x *= -1.f; tr.v2.x -= 0.1f;
+   //    primitives.triangles.Append(tr);
+   //}
 
-    PolarTracer pt(renderParams, primitives);
+   std::cout << "a\n";
+
+    Memory::CPU_Array<CPU_Image<Math::Coloru8>> textures(1);
+    std::cout << "a\n";
+    textures[0] = ReadImage("res/brick.ppm");
+    std::cout << "a\n";
+    SaveImage(textures[0], "res/out");
+    std::cout << "a\n";
+    PolarTracer pt(renderParams, primitives, textures);
+    std::cout << "a\n";
 
     const auto startTime = std::chrono::high_resolution_clock::now();
     pt.RayTraceScene(image);
