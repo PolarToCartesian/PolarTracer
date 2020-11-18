@@ -1,5 +1,8 @@
+#include <array>
+#include <thread>
 #include <cfloat>
 #include <chrono>
+#include <future>
 #include <limits>
 #include <ostream>
 #include <cassert>
@@ -15,13 +18,115 @@
 #include <curand_kernel.h>
 #include <device_launch_parameters.h>
 
+#include <d3d12.h>
+#include <dxgi1_6.h>
+#include <Windows.h>
+#include <windowsx.h>
+#include <d3dcompiler.h>
+
+#pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "d3d12.lib")
+#pragma comment(lib, "user32.lib") 
+#pragma comment(lib, "kernel32.lib")
+#pragma comment(lib, "D3DCompiler.lib")
+
 // +--------------------+
 // | Constants / Common |
 // +--------------------+
 
 __constant__ const float  EPSILON = 0.0001f;
-__constant__ const size_t MAX_REC = 5u;
+__constant__ const size_t MAX_REC = 3u;
 __constant__ const size_t SPP     = 5u;
+
+// +--------+
+// | Window |
+// +--------+
+
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) noexcept;
+
+class Window {
+private:
+    HWND m_handle = NULL;
+
+    size_t m_width, m_height;
+
+public:
+    Window() = default;
+
+    Window(const char* name, const size_t width, const size_t height) noexcept
+        : m_width(width), m_height(height)
+    {
+        const HINSTANCE hInstance = GetModuleHandleA(NULL);
+
+        WNDCLASSA wc = { };
+        wc.lpfnWndProc = WindowProc;
+        wc.hInstance = hInstance;
+        wc.lpszClassName = name;
+        RegisterClassA(&wc);
+
+        RECT rect{ 0, 0, width, height };
+        if (!AdjustWindowRect(&rect, NULL, false))
+            return;
+
+        this->m_handle = CreateWindowExA(
+            0, name,
+            name, WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME, // unresizable
+            CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top,
+            NULL, NULL, hInstance, NULL
+        );
+
+        if (this->m_handle == NULL)
+            return;
+
+        ShowWindow(this->m_handle, SW_SHOW);
+
+#ifdef _WIN64
+        SetWindowLongPtrA(this->m_handle, GWLP_USERDATA, (LONG_PTR)this);
+#else
+        SetWindowLongA(this->m_handle, GWLP_USERDATA, (LONG)this);
+#endif
+    }
+
+    inline void Update() noexcept {
+        MSG msg = { };
+        while (PeekMessageA(&msg, this->m_handle, 0, 0, PM_REMOVE) > 0) {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+    }
+
+    inline size_t GetClientWidth()  const noexcept { return this->m_width; }
+    inline size_t GetClientHeight() const noexcept { return this->m_height; }
+
+    inline HWND GetHandle() const noexcept { return this->m_handle; }
+    inline bool IsRunning() const noexcept { return this->m_handle != NULL; }
+
+    inline void Close() noexcept {
+        DestroyWindow(this->m_handle);
+
+        this->m_handle = NULL;
+    }
+
+    inline ~Window() noexcept { this->Close(); }
+}; // class Window
+
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) noexcept {
+#ifdef _WIN64
+    Window* pWindow = reinterpret_cast<Window*>(GetWindowLongPtrA(hwnd, GWLP_USERDATA));
+#else
+    Window* pWindow = reinterpret_cast<Window*>(GetWindowLongA(hwnd, GWLP_USERDATA));
+#endif
+
+    if (pWindow) {
+        switch (msg) {
+        case WM_CLOSE:
+            pWindow->Close();
+            return 0;
+        }
+    }
+
+    return DefWindowProcA(hwnd, msg, wParam, lParam);
+}
 
 // The "Device" enum class represents the devices from which
 // memory can be accessed. This is necessary because the cpu can't
@@ -688,7 +793,10 @@ template <typename T> using GPU_Texture = GPU_Image<T>;
 CPU_Image<Math::Coloru8> ReadImage(const std::string& filename) noexcept {
     std::ifstream file(filename.c_str(), std::ifstream::binary);
 
+    std::cout << "created\n";
+
 	if (file.is_open()) {
+        std::cout << "opened\n";
 		// Read Header
 		std::string magicNumber;
 		float maxColorValue;
@@ -702,6 +810,7 @@ CPU_Image<Math::Coloru8> ReadImage(const std::string& filename) noexcept {
 
 		// Parse Image Data
         if (magicNumber == "P6") {
+            std::cout << "read magic\n";
             const size_t bufferSize = image.GetPixelCount() * sizeof(Math::Coloru8);
 
             const Memory::CPU_UniquePtr<std::uint8_t> rawImageData = Memory::AllocateSize<std::uint8_t, Device::CPU>(bufferSize);
@@ -710,11 +819,17 @@ CPU_Image<Math::Coloru8> ReadImage(const std::string& filename) noexcept {
             size_t j = 0;
             for (size_t i = 0; i < image.GetPixelCount(); ++i)
                 image(i) = Math::Coloru8(rawImageData[j++], rawImageData[j++], rawImageData[j++], 255u);
+
+            std::cout << "done\n";
         } else {
 			std::cout << magicNumber << " is not supported\n";
         }
 
+        std::cout << "closing\n";
+
         file.close();
+
+        std::cout << "closed\n";
 
         return image;
 	} else {
@@ -722,24 +837,6 @@ CPU_Image<Math::Coloru8> ReadImage(const std::string& filename) noexcept {
     }
 
     return CPU_Image<Math::Coloru8>(0, 0);
-}
-
-void SaveImage(const Image<Math::Coloru8, Device::CPU>& image, const std::string& filename) noexcept {
-    const std::string fullFilename = filename + ".pam";
-
-    // Open
-    FILE* fp = std::fopen(fullFilename.c_str(), "wb");
-
-    if (fp) {
-        // Header
-        std::fprintf(fp, "P7\nWIDTH %d\nHEIGHT %d\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", image.GetWidth(), image.GetHeight());
-
-        // Write Contents
-        std::fwrite(image.GetPtr(), image.GetPixelCount() * sizeof(Math::Coloru8), 1u, fp);
-
-        // Close
-        std::fclose(fp);
-    }
 }
 
 // +-------------+
@@ -1040,8 +1137,8 @@ __global__ void RayTracingDispatcher(const Memory::GPU_Ptr<Math::Coloru8> pSurfa
                                      const Memory::GPU_Ptr<RenderParams> pParams,
                                      const Primitives<Memory::ArrayView, Device::GPU> primitives) {
     // Calculate the thread's (X, Y) location
-    const size_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
-    const size_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
+    const std::uint64_t pixelX = threadIdx.x + blockIdx.x * blockDim.x;
+    const std::uint64_t pixelY = threadIdx.y + blockIdx.y * blockDim.y;
 
     // Bounds check
     if (pixelX >= pParams->width || pixelY >= pParams->height) return;
@@ -1066,7 +1163,29 @@ __global__ void RayTracingDispatcher(const Memory::GPU_Ptr<Math::Coloru8> pSurfa
     *(pSurface + index) = Math::Coloru8(pixelColor.x, pixelColor.y, pixelColor.z, pixelColor.w);
 }
 
+#define FRAME_BUFFER_COUNT (2)
+
+template <typename T>
+using ElementPerFrameBuffer = std::array<T, FRAME_BUFFER_COUNT>;
+
 class PolarTracer {
+private:
+    IDXGIFactory4*        m_dxgiFactory               = nullptr;
+    ID3D12Device2*        m_device                    = nullptr;
+    IDXGISwapChain3*      m_swapChain                 = nullptr;
+    ID3D12CommandQueue*   m_commandQueue              = nullptr;
+    ID3D12DescriptorHeap* m_frameBufferDescriptorHeap = nullptr;
+
+    ElementPerFrameBuffer<ID3D12Fence*>               m_fences;
+    ElementPerFrameBuffer<UINT>                       m_fenceValues = { 0 };
+    ElementPerFrameBuffer<ID3D12Resource*>            m_frameBuffers;
+    ElementPerFrameBuffer<ID3D12CommandAllocator*>    m_commandAllocators;
+    ElementPerFrameBuffer<ID3D12GraphicsCommandList*> m_commandLists;
+
+    HANDLE m_fenceEvent;
+
+    ElementPerFrameBuffer<ID3D12Resource*> m_textures;
+
 private:
     struct {
         RenderParams m_renderParams;
@@ -1080,39 +1199,179 @@ private:
         Memory::GPU_Array<GPU_Image<Math::Coloru8>> m_textures;
     } device;
 
+    Window window;
+
 public:
     PolarTracer(const RenderParams& renderParams, const Primitives<Memory::Array, Device::CPU>& primitives = {}, const Memory::CPU_Array<CPU_Image<Math::Coloru8>>& textures = {})
-        : host{ renderParams }
+        : host{ renderParams }, window("PolarTracer", 1920, 1080)
     {
-        this->device.m_frameBuffer   = Image<Math::Coloru8, Device::GPU>(renderParams.width, renderParams.height);
+        // Save arguments
         this->device.m_pRenderParams = Memory::AllocateSingle<RenderParams, Device::GPU>();
         this->device.m_primitives    = primitives;
         this->device.m_textures      = textures;
 
         const auto src = Memory::CPU_Ptr<RenderParams>(&this->host.m_renderParams);
         Memory::CopySingle(this->device.m_pRenderParams, src);
+
+        // 
+        this->device.m_frameBuffer   = Image<Math::Coloru8, Device::GPU>(renderParams.width, renderParams.height);
+
+        // Initialize DirectX 12
+        // Create DXGIFactory
+        if (CreateDXGIFactory2(0, IID_PPV_ARGS(&this->m_dxgiFactory)) != S_OK)
+            std::cout << "[D3D12] Could Not Create DXGIFactory2\n";
+
+        // Create Device
+        IDXGIAdapter1* adapter;
+        for (UINT adapterIndex = 0; this->m_dxgiFactory->EnumAdapters1(adapterIndex, &adapter) != DXGI_ERROR_NOT_FOUND; ++adapterIndex) {
+            DXGI_ADAPTER_DESC1 desc;
+            if (adapter->GetDesc1(&desc) != S_OK)
+                continue;
+
+            if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+                continue;
+
+            if (D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, _uuidof(ID3D12Device), nullptr) == S_OK)
+                break;
+        }
+
+        if (D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_device)) != S_OK)
+            std::cout << "[DIRECTX 12] Failed To D3D12CreateDevice\n";
+
+        // Commad Queue
+        D3D12_COMMAND_QUEUE_DESC cmdQueueDesc = {};
+        cmdQueueDesc.Type = D3D12_COMMAND_LIST_TYPE::D3D12_COMMAND_LIST_TYPE_DIRECT;
+        cmdQueueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+        cmdQueueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+        cmdQueueDesc.NodeMask = 0;
+
+        if (this->m_device->CreateCommandQueue(&cmdQueueDesc, IID_PPV_ARGS(&this->m_commandQueue)) != S_OK)
+            std::cout << "[D3D12] Could Not Create Command Queue";
+
+        // Swapchain
+        DXGI_MODE_DESC backBufferDesc = {};
+        backBufferDesc.Width = window.GetClientWidth();
+        backBufferDesc.Height = window.GetClientHeight();
+        backBufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+        DXGI_SAMPLE_DESC sampleDesc = {};
+        sampleDesc.Count = 1;
+
+        DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
+        swapChainDesc.BufferCount = FRAME_BUFFER_COUNT;
+        swapChainDesc.BufferDesc = backBufferDesc;
+        swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        swapChainDesc.OutputWindow = window.GetHandle();
+        swapChainDesc.SampleDesc = sampleDesc;
+        swapChainDesc.Windowed = true;
+        swapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING; // 0
+
+        if (this->m_dxgiFactory->CreateSwapChain(this->m_commandQueue, &swapChainDesc, (IDXGISwapChain**)&this->m_swapChain) != S_OK)
+            std::cout << "[DIRECTX 12] Failed To Create Swap Chain";
+
+        // Create Frame Buffer Descriptor Heap
+
+        D3D12_DESCRIPTOR_HEAP_DESC descriptorHeapDesc = {};
+        descriptorHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        descriptorHeapDesc.NumDescriptors = FRAME_BUFFER_COUNT;
+        descriptorHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS::D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+
+        if (this->m_device->CreateDescriptorHeap(&descriptorHeapDesc, IID_PPV_ARGS(&this->m_frameBufferDescriptorHeap)) != S_OK)
+            std::cout << "[D3D12] Could Not Create Descriptor Heap";
+
+        // Get Frame Buffers & Create Render Target Views
+        D3D12_CPU_DESCRIPTOR_HANDLE currentLocation = this->m_frameBufferDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        const UINT incrementSize = this->m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        for (size_t frameIndex = 0u; frameIndex < FRAME_BUFFER_COUNT; ++frameIndex) {
+            if (this->m_swapChain->GetBuffer(frameIndex, IID_PPV_ARGS(&this->m_frameBuffers[frameIndex])) != S_OK)
+                std::cout << "[DIRECTX 12] Failed To Get Back Buffer";
+
+            this->m_device->CreateRenderTargetView(this->m_frameBuffers[frameIndex], nullptr, currentLocation);
+            currentLocation.ptr += incrementSize;
+        }
+
+        for (size_t frameIndex = 0u; frameIndex < FRAME_BUFFER_COUNT; ++frameIndex) {
+            ID3D12CommandAllocator*& commandAllocator = this->m_commandAllocators[frameIndex];
+            ID3D12GraphicsCommandList*& commandList = this->m_commandLists[frameIndex];
+
+            // Create Command Allocator
+            if (this->m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE::D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator)) != S_OK)
+                std::cout << "[DIRECTX 12] Failed To CreateCommandAllocator";
+
+            // Create Command List
+            if (this->m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator, NULL, IID_PPV_ARGS(&commandList)) != S_OK)
+                std::cout << "[DIRECTX 12] Failed To CreateCommandList";
+        }
+
+        // Create Fences
+        for (size_t frameIndex = 0u; frameIndex < FRAME_BUFFER_COUNT; ++frameIndex) {
+            ID3D12Fence*& fence = this->m_fences[frameIndex];
+            this->m_device->CreateFence(0, D3D12_FENCE_FLAGS::D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+        }
+
+        this->m_fenceEvent = CreateEventA(nullptr, FALSE, FALSE, nullptr);
     }
 
-    inline void RayTraceScene(const Image<Math::Coloru8, Device::CPU>& outSurface) {
-        assert(outSurface.GetWidth() == this->host.m_renderParams.width && outSurface.GetHeight() == this->host.m_renderParams.height);
-
-        const size_t bufferSize = outSurface.GetPixelCount() * sizeof(Math::Coloru8);
-
-        // Allocate 1 thread per pixel of coordinates (X,Y). Use as many blocks in the grid as needed
-        // The RayTrace function will use the thread's index (both in the grid and in a block) to determine the pixel it will trace rays through
-        const dim3 dimBlock = dim3(16, 16); // Was 32x32: 32 warps of 32 threads per block (=1024 threads in total which is the hardware limit)
-        const dim3 dimGrid = dim3(std::ceil(this->host.m_renderParams.width / static_cast<float>(dimBlock.x)),
-            std::ceil(this->host.m_renderParams.height / static_cast<float>(dimBlock.y)));
-
-        // trace rays through each pixel
-        RayTracingDispatcher<<<dimGrid, dimBlock>>>(this->device.m_frameBuffer.GetPtr(), this->device.m_pRenderParams, this->device.m_primitives);
-
-        // wait for the job to finish
-        printf("Job Finished with %s\n", cudaGetErrorString(cudaDeviceSynchronize()));
-
-        // copy the gpu buffer to a new cpu buffer
-        Memory::CopySize(outSurface.GetPtr(), this->device.m_frameBuffer.GetPtr(), bufferSize);
+    ~PolarTracer() noexcept {
+        CloseHandle(this->m_fenceEvent);
     }
+
+    void Run() noexcept {
+        while (window.IsRunning()) {
+            window.Update();
+
+            const size_t frameIndex = this->m_swapChain->GetCurrentBackBufferIndex();
+            
+            this->m_commandLists[frameIndex]->Reset(this->m_commandAllocators[frameIndex], nullptr);
+            
+            D3D12_RESOURCE_BARRIER backBufferTransition;
+            backBufferTransition.Type  = D3D12_RESOURCE_BARRIER_TYPE::D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            backBufferTransition.Flags = D3D12_RESOURCE_BARRIER_FLAGS::D3D12_RESOURCE_BARRIER_FLAG_END_ONLY; // not sure
+            backBufferTransition.Transition.pResource   = this->m_frameBuffers[frameIndex];
+            backBufferTransition.Transition.Subresource = 0u;
+            backBufferTransition.Transition.StateBefore = D3D12_RESOURCE_STATES::D3D12_RESOURCE_STATE_PRESENT;
+            backBufferTransition.Transition.StateAfter  = D3D12_RESOURCE_STATES::D3D12_RESOURCE_STATE_RENDER_TARGET;
+            
+            this->m_commandLists[frameIndex]->ResourceBarrier(1u, &backBufferTransition);
+            
+            std::swap(backBufferTransition.Transition.StateBefore, backBufferTransition.Transition.StateAfter);
+            this->m_commandLists[frameIndex]->ResourceBarrier(1u, &backBufferTransition);
+            
+            this->m_commandLists[frameIndex]->Close();
+            this->m_commandQueue->ExecuteCommandLists(1u, reinterpret_cast<ID3D12CommandList* const*>(&this->m_commandLists[frameIndex]));
+            
+            const UINT fenceSignalValue = this->m_fenceValues[frameIndex] + 1u;
+            this->m_commandQueue->Signal(this->m_fences[frameIndex], fenceSignalValue);
+            
+            while (this->m_fences[frameIndex]->GetCompletedValue() < fenceSignalValue) {
+                this->m_fences[frameIndex]->SetEventOnCompletion(fenceSignalValue, this->m_fenceEvent);
+                WaitForSingleObject(this->m_fenceEvent, INFINITE);
+            }
+            
+            this->m_swapChain->Present(DXGI_SWAP_EFFECT_DISCARD, 0);
+            
+            ++this->m_fenceValues[frameIndex];
+        }
+    }
+
+    //inline void RayTraceScene() {
+       // const size_t bufferSize = outSurface.GetPixelCount() * sizeof(Math::Coloru8);
+       //
+       // // Allocate 1 thread per pixel of coordinates (X,Y). Use as many blocks in the grid as needed
+       // // The RayTrace function will use the thread's index (both in the grid and in a block) to determine the pixel it will trace rays through
+       // const dim3 dimBlock = dim3(16, 16); // Was 32x32: 32 warps of 32 threads per block (=1024 threads in total which is the hardware limit)
+       // const dim3 dimGrid = dim3(std::ceil(this->host.m_renderParams.width / static_cast<float>(dimBlock.x)),
+       //     std::ceil(this->host.m_renderParams.height / static_cast<float>(dimBlock.y)));
+       //
+       // // trace rays through each pixel
+       // RayTracingDispatcher<<<dimGrid, dimBlock>>>(this->device.m_frameBuffer.GetPtr(), this->device.m_pRenderParams, this->device.m_primitives);
+       //
+       // // wait for the job to finish
+       // printf("Job Finished with %s\n", cudaGetErrorString(cudaDeviceSynchronize()));
+
+
+   // }
 }; // PolarTracer
 
 Memory::CPU_Array<Triangle> LoadObjectFile(const char* filename, const Material& material) {
@@ -1157,12 +1416,10 @@ Memory::CPU_Array<Triangle> LoadObjectFile(const char* filename, const Material&
     return triangles;
 }
 
-#define WIDTH  (1920)
-#define HEIGHT (1080)
+#define WIDTH  (1920 / 4)
+#define HEIGHT (1080 / 4)
 
 int main(int argc, char** argv) {
-    Image<Math::Coloru8, Device::CPU> image(WIDTH, HEIGHT);
-
     RenderParams renderParams;
 
     renderParams.width  = WIDTH;
@@ -1242,33 +1499,7 @@ int main(int argc, char** argv) {
    //    primitives.triangles.Append(tr);
    //}
 
-   std::cout << "a\n";
-
-    Memory::CPU_Array<CPU_Image<Math::Coloru8>> textures(1);
-    std::cout << "a\n";
-    textures[0] = ReadImage("res/brick.ppm");
-    std::cout << "a\n";
-    SaveImage(textures[0], "res/out");
-    std::cout << "a\n";
+    Memory::CPU_Array<CPU_Image<Math::Coloru8>> textures;
     PolarTracer pt(renderParams, primitives, textures);
-    std::cout << "a\n";
-
-    const auto startTime = std::chrono::high_resolution_clock::now();
-    pt.RayTraceScene(image);
-    const auto endTime   = std::chrono::high_resolution_clock::now();
-
-    const double duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() / 1000.f;
-
-    std::cout << std::fixed << '\n';
-    std::cout << "Took " << duration << "s to render a " << WIDTH << " by " << HEIGHT << " image at " << SPP << " SPP with a maximum recursion depth of " << MAX_REC << ".\n";
-    std::cout << "Big numbers:\n";
-    std::cout << "-->" << (unsigned int)(WIDTH * HEIGHT) << " pixels.\n";
-    std::cout << "-->" << (unsigned int)(WIDTH * HEIGHT * SPP) << " samples.\n";
-    
-    std::cout << "-->" << ((std::uint64_t)WIDTH * HEIGHT * SPP * MAX_REC) << " photons.\n";
-    std::cout << "Timings:\n";
-    std::cout << "-->" << (std::uint64_t)((WIDTH * HEIGHT * SPP) / duration) << " samples per sec.\n";
-    std::cout << "-->" << (((std::uint64_t)WIDTH * HEIGHT * SPP * MAX_REC) / duration) << " photon paths per sec.\n";
-
-    SaveImage(image, "frame");
+    pt.Run();
 }
