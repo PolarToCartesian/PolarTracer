@@ -15,10 +15,10 @@ namespace Math {
             this->x = Clamp(this->x, min, max); this->y = Clamp(this->y, min, max); this->z = Clamp(this->z, min, max); this->w = Clamp(this->w, min, max);
         }
     
-        __host__ __device__ inline float GetLength3D() const noexcept { return sqrt(this->x * this->x + this->y * this->y + this->z * this->z); }
-        __host__ __device__ inline float GetLength4D() const noexcept { return sqrt(this->x * this->x + this->y * this->y + this->z * this->z + this->w * this->w); }
+        __host__ __device__ inline float GetLength3D() const noexcept { return sqrtf(this->x * this->x + this->y * this->y + this->z * this->z); }
+        __host__ __device__ inline float GetLength4D() const noexcept { return sqrtf(this->x * this->x + this->y * this->y + this->z * this->z + this->w * this->w); }
     
-        __host__ __device__ inline void Normalize3D() noexcept { this->operator/=(this->GetLength3D()); }
+        __host__ __device__ inline void Normalize3D() noexcept { const float l = this->GetLength3D(); this->operator/=(Vec4f32(l, l, l, 1.f)); }
         __host__ __device__ inline void Normalize4D() noexcept { this->operator/=(this->GetLength4D()); }
     
         template <typename _U>

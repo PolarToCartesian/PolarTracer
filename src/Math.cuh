@@ -5,8 +5,8 @@
 #include "Common.cuh"
 
 __constant__ const float  EPSILON = 0.0001f;
-__constant__ const size_t MAX_REC = 5u;
-__constant__ const size_t SPP     = 5u;
+__constant__ const size_t MAX_REC = 2u;
+__constant__ const size_t SPP     = 10u;
 
 namespace Math {
     template <typename T> struct Vec4;

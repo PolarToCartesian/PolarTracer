@@ -236,8 +236,6 @@ namespace Memory {
             cudaMalloc(reinterpret_cast<void**>(&p), size);
             return GPU_Ptr<T>(p);
         }
-
-        return Pointer<T, D>{nullptr}; // done to suppress a warning
     }
 
     template <typename T, Device D>
