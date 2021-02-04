@@ -60,41 +60,41 @@ __device__ Intersection Ray::Intersects(const Plane& plane) const noexcept {
     return Intersection::MakeNullIntersection(*this);
 }
 
-//https://www.scratchapixel.com/lessons/3d-basic-rendering/ray-tracing-rendering-a-triangle
-template <>
+template<>
 __device__ Intersection Ray::Intersects(const Triangle& triangle) const noexcept {
-    float u = 0.f, v = 0.f;
+    Math::Vec4f32 edge1 = triangle.v1 - triangle.v0;
+    Math::Vec4f32 edge2 = triangle.v2 - triangle.v0;
+    Math::Vec4f32 h     = Math::CrossProduct3D(this->direction, edge2);
 
-    const auto v0v1 = triangle.v1 - triangle.v0; 
-    const auto v0v2 = triangle.v2 - triangle.v0; 
-    const auto pvec = Math::CrossProduct3D(v0v2,  this->direction);
+    const float a = Math::DotProduct3D(edge1, h);
+    if (a > -EPSILON && a < EPSILON)
+        return Intersection::MakeNullIntersection(*this);    // This ray is parallel to this triangle.
+    
+    const float f = 1.0f/a;
 
-    const auto det = Math::DotProduct3D(v0v1, pvec); 
+    const Math::Vec4f32 s = this->origin - triangle.v0;
+    const float u = f * Math::DotProduct3D(s, h);
+    if (u < 0.0 || u > 1.0)
+        return Intersection::MakeNullIntersection(*this);
+    
+    const Math::Vec4f32 q = Math::CrossProduct3D(s, edge1);
+    const float v = f * Math::DotProduct3D(this->direction, q);
+    if (v < 0.0 || u + v > 1.0)
+        return Intersection::MakeNullIntersection(*this);
 
-    // ray and triangle are parallel if det is close to 0
-    if (fabs(det) < EPSILON) return Intersection::MakeNullIntersection(*this);
+    const float t = f * Math::DotProduct3D(edge2, q);
+    if (t > EPSILON) {
+        Intersection intersection;
+        intersection.inRay    = *this;
+        intersection.t        = t;
+        intersection.location = this->origin + intersection.t * this->direction;
+        intersection.normal   = Math::Normalized3D(Math::CrossProduct3D(edge1, edge2));
+        intersection.material = triangle.material;
 
-    const float invDet = 1.f / det; 
- 
-    const auto tvec = this->origin - triangle.v0; 
-    u = Math::DotProduct3D(tvec, pvec) * invDet; 
-    if (u < 0 || u > 1) return Intersection::MakeNullIntersection(*this); 
- 
-    const auto qvec = Math::CrossProduct3D(tvec, v0v1); 
-    v = Math::DotProduct3D(this->direction, qvec) * invDet; 
-    if (v < 0 || u + v > 1) return Intersection::MakeNullIntersection(*this); 
- 
-    Intersection intersection;
-    intersection.t        = Math::DotProduct3D(v0v2, qvec) * invDet;
-
-    if (intersection.t <= 0) return Intersection::MakeNullIntersection(*this); 
-
-    intersection.inRay    = *this;
-    intersection.location = this->origin + intersection.t * this->direction;
-    intersection.normal   = Math::Normalized3D(Math::CrossProduct3D(v0v1, v0v2)); //TODO:: Actual Normal
-    intersection.material = triangle.material;
-
-    return intersection;
+        return intersection;
+    }
+    
+    return Intersection::MakeNullIntersection(*this);
 }
 
 template <typename T_OBJ>
