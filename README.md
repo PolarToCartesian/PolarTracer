@@ -3,7 +3,7 @@
 ![Sample Image](samples/sample.png)
 ![Sample Image](samples/sample2.png)
 
-A path tracer build with cuda and c++. For more information about path tracers, you can visit a previous project of mine [CPU-Path-Tracer](https://github.com/PolarToCartesian/CPU-Path-Tracer)
+A Path Tracer built with Cuda and C++. For more information about path tracers, you can visit a previous project of mine [CPU-Path-Tracer](https://github.com/PolarToCartesian/CPU-Path-Tracer)
 
 ## Building Instructions
 
